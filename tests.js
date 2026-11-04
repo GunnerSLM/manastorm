@@ -11,6 +11,8 @@ if (typeof load === "undefined" && typeof require !== "undefined") {
 if (typeof console === "undefined") {
   globalThis.console = { log: (...args) => print(args.join(" ")) };
 }
+if (!console.warn) console.warn = console.log;
+if (!console.error) console.error = console.log;
 
 load("data/cards.js");
 load("data/relics.js");
@@ -895,11 +897,14 @@ function createMockElement(tagName, id = "", className = "") {
   });
 
   // 5.1.6 Composite visual hand span: flexbox step + CSS translate does not double-apply spacing
-  const fs = require("fs");
-  const path = require("path");
-  const css = fs.readFileSync(path.join(__dirname, "style.css"), "utf8");
-  const handCardBlock = (css.match(/\.hand-card\s*\{([^}]+)\}/) || [])[1] || "";
-  const usesFanXInTranslate = /translate:[^;]*var\(--fan-x/i.test(handCardBlock);
+  let usesFanXInTranslate = false;
+  if (typeof require === "function") {
+    const fs = require("fs");
+    const path = require("path");
+    const css = fs.readFileSync(path.join(__dirname, "style.css"), "utf8");
+    const handCardBlock = (css.match(/\.hand-card\s*\{([^}]+)\}/) || [])[1] || "";
+    usesFanXInTranslate = /translate:[^;]*var\(--fan-x/i.test(handCardBlock);
+  }
 
   [1, 2, 3, 5, 8, 10, 12, 15].forEach(c => {
     const W = 900;
@@ -1320,7 +1325,7 @@ function createMockElement(tagName, id = "", className = "") {
 }
 
 // --- 5.7 CSS Classes and Stylesheet Integrity ---
-{
+if (typeof require === "function") {
   const fs = require("fs");
   const path = require("path");
   const css = fs.readFileSync(path.join(__dirname, "style.css"), "utf8");
@@ -1473,6 +1478,384 @@ function createMockElement(tagName, id = "", className = "") {
   assert(
     handHover.rotate && handHover.rotate.includes("0deg") && handHover.scale && handHover.scale.includes("1.15"),
     `5.7.8 Normal hand card hover straightens to 0deg and scales to 1.15 (got rot: ${handHover.rotate}, scale: ${handHover.scale})`
+  );
+}
+
+// ============================================================================
+// SECTION 6: SAVE RECOVERY, CHECKSUMS, STATE SNAPSHOTS, DOM SAFETY & SCHEDULER
+// ============================================================================
+console.log("\n=== BEGINNING SECTION 6: SAVE RECOVERY, DOM SAFETY & SCHEDULER SUITE ===");
+
+function createMemoryStorage(initial = {}) {
+  const map = new Map(Object.entries(initial));
+  return {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => { map.set(k, String(v)); },
+    removeItem: (k) => { map.delete(k); },
+    clear: () => { map.clear(); },
+    _dump: () => Object.fromEntries(map.entries())
+  };
+}
+
+// --- 6.1 Canonical Save Schema Normalization & Legacy Migration ---
+{
+  const legacyV0Save = {
+    version: 0,
+    archetypeId: "gruul",
+    encounterIdx: 2,
+    playerLife: 17,
+    gold: 11,
+    deck: ["forest", { id: "lightning_bolt", foil: "Halo", permPowerBonus: 2 }],
+    relics: [{ id: "sol_ring" }, "chromatic_lantern"],
+    consumables: [{ id: "demonic_tutor" }]
+  };
+  const check = normalizeCanonicalSave(legacyV0Save);
+  assert(
+    check.valid === true &&
+    check.migrated === true &&
+    check.save.version === 1 &&
+    check.save.masterDeck.length === 2 &&
+    check.save.masterDeck[1].foil === "Halo" &&
+    check.save.relicIds.length === 2 &&
+    check.save.relics.length === 2 &&
+    check.save.consumableIds[0] === "demonic_tutor" &&
+    typeof check.save.saveIntegrity === "string" &&
+    check.save.saveIntegrity.startsWith("fnv1a_"),
+    "6.1 Legacy v0/unversioned save migrates to canonical v1 schema with both relicIds and relics populated and saveIntegrity checksum"
+  );
+}
+
+// --- 6.2 Invalid Save JSON, Partial Payloads & Checksum Tampering ---
+{
+  const badType = normalizeCanonicalSave(null);
+  const badVer = normalizeCanonicalSave({ version: 99, masterDeck: [{ id: "forest" }] });
+  const badCards = normalizeCanonicalSave({ version: 1, masterDeck: [{ id: "nonexistent_card_xyz" }] });
+  assert(
+    !badType.valid && badType.status === "invalid_type" &&
+    !badVer.valid && badVer.status === "unsupported_version" &&
+    !badCards.valid && badCards.status === "unrecognized_cards",
+    "6.2 Invalid types, unsupported versions, and unrecognized card decks are rejected with explicit status codes"
+  );
+
+  // Partial encounterState payload is safely stripped without crashing normalization
+  const partialEncounterPayload = normalizeCanonicalSave({
+    version: 1,
+    inShop: false,
+    masterDeck: [{ id: "forest" }, { id: "mountain" }],
+    encounterState: { library: ["not-valid-snapshot-missing-arrays"] }
+  });
+  assert(
+    partialEncounterPayload.valid === true && partialEncounterPayload.save.encounterState === null,
+    "6.2 Partial/incomplete encounterState is safely nulled so encounter restarts cleanly"
+  );
+
+  // Tampered checksum detection
+  const tampered = JSON.parse(JSON.stringify(partialEncounterPayload.save));
+  tampered.gold = 99999; // Mutate gold without updating saveIntegrity
+  const tamperCheck = normalizeCanonicalSave(tampered);
+  assert(
+    tamperCheck.valid === false && tamperCheck.status === "corrupt_checksum",
+    "6.3 Checksum tampering (modified gold with stale saveIntegrity) is detected and rejected"
+  );
+}
+
+// --- 6.4 Backup Save Preservation & Recovery on Corrupt Primary Save ---
+{
+  resetTestState();
+  startNewRun(STARTER_DECKS[1]); // Rakdos
+  state.gold = 14;
+  state.playerLife = 16;
+  state.encounterIdx = 1;
+
+  const prevHeadless = state.headless;
+  const prevDoc = globalThis.document;
+  const prevLS = globalThis.localStorage;
+  const memStore = createMemoryStorage();
+
+  try {
+    state.headless = false;
+    globalThis.document = {};
+    globalThis.localStorage = memStore;
+
+    // 1. Save known-good run state
+    const savedOk = saveRunState(false);
+    const backupAfterFirstSave = memStore.getItem(SAVE_BACKUP_KEY);
+    assert(
+      savedOk && Boolean(backupAfterFirstSave),
+      "6.4.1 saveRunState writes both primary save and known-good backup save"
+    );
+
+    // 2. Corrupt primary save in localStorage with truncated JSON
+    const corruptRaw = '{"version":1,"gold":999,"masterDeck":[BROKEN_JSON';
+    memStore.setItem(SAVE_KEY, corruptRaw);
+
+    // Mutate current runtime state to verify loadRunState recovers from backup
+    state.gold = 0;
+    state.playerLife = 1;
+    state.encounterIdx = 0;
+
+    const recovered = loadRunState();
+    const preservedCorrupt = memStore.getItem(SAVE_CORRUPT_KEY);
+    assert(
+      recovered === true &&
+      state.gold === 14 &&
+      state.playerLife === 16 &&
+      state.encounterIdx === 1 &&
+      Boolean(preservedCorrupt) &&
+      preservedCorrupt.includes("BROKEN_JSON"),
+      "6.4.2 When primary save is corrupt JSON, loadRunState preserves corrupt payload in SAVE_CORRUPT_KEY and recovers from SAVE_BACKUP_KEY"
+    );
+  } finally {
+    state.headless = prevHeadless;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevLS === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevLS;
+  }
+}
+
+// --- 6.5 Total Restore Failure Rollback & Restore-After-Run-Over ---
+{
+  resetTestState();
+  startNewRun(STARTER_DECKS[2]); // Simic
+  state.gold = 19;
+  state.playerLife = 18;
+
+  const prevHeadless = state.headless;
+  const prevDoc = globalThis.document;
+  const prevLS = globalThis.localStorage;
+  const memStore = createMemoryStorage({
+    [SAVE_KEY]: "{not-valid-json",
+    [SAVE_BACKUP_KEY]: '{"version":99,"masterDeck":[]}'
+  });
+
+  try {
+    state.headless = false;
+    globalThis.document = {};
+    globalThis.localStorage = memStore;
+
+    // Both primary and backup are invalid: state must roll back cleanly to pre-restore snapshot
+    const restored = loadRunState();
+    assert(
+      restored === false &&
+      state.deckArchetype.id === STARTER_DECKS[2].id &&
+      state.gold === 19 &&
+      state.playerLife === 18,
+      "6.5.1 When both primary and backup saves fail validation, loadRunState rolls back cleanly to pre-restore state"
+    );
+
+    // Now test Restore-After-Run-Over:
+    // Save a valid run first, then set state.runOver = true and state.combatLocked = true
+    memStore.clear();
+    state.runOver = false;
+    state.combatLocked = false;
+    saveRunState(false);
+
+    state.runOver = true;
+    state.combatLocked = true;
+    state.playerLife = 0;
+    state.gold = 0;
+
+    // Attempting to save while runOver === true must be a no-op (must not clobber valid save)
+    const savedWhileOver = saveRunState(false);
+    assert(savedWhileOver === false, "6.5.2 saveRunState refuses to overwrite save when state.runOver is true");
+
+    // Restoring after runOver resets runOver & combatLocked to false and restores life/gold
+    const restoredAfterOver = loadRunState();
+    assert(
+      restoredAfterOver === true &&
+      state.runOver === false &&
+      state.combatLocked === false &&
+      state.playerLife === 18 &&
+      state.gold === 19,
+      "6.5.3 loadRunState after runOver resets runOver and combatLocked to false and restores saved run"
+    );
+  } finally {
+    state.headless = prevHeadless;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevLS === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevLS;
+  }
+}
+
+// --- 6.6 Missing DOM Node Resilience & Safe Modal Helpers ---
+{
+  const prevHeadless = state.headless;
+  const prevDoc = globalThis.document;
+  try {
+    state.headless = false;
+    // Sparse document where getElementById only returns plane-badge and all other nodes are missing (null)
+    const planeBadgeStub = createMockElement("div", "plane-badge", "plane-badge");
+    globalThis.document = {
+      getElementById: (id) => (id === "plane-badge" ? planeBadgeStub : null),
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener: () => {}
+    };
+
+    let threwOnMissingDom = false;
+    try {
+      renderAll();
+      renderIncremental(["boss", "math", "stats", "command", "board", "hand", "window"]);
+      renderShop();
+      openDeckInspector("Test Title", "Test Desc", state.masterDeck);
+      openNewRunModal(true);
+      openVictoryModal(getCurrentEncounter(), 5, 2);
+      initEvents();
+      safeShowModal("nonexistent-dialog");
+      safeCloseModal("nonexistent-dialog");
+    } catch (err) {
+      threwOnMissingDom = true;
+    }
+
+    assert(
+      threwOnMissingDom === false && planeBadgeStub.textContent.includes("PLANE"),
+      "6.6 UI renderers, modals, and event binders degrade gracefully without throwing when DOM nodes are missing"
+    );
+  } finally {
+    state.headless = prevHeadless;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+  }
+}
+
+// --- 6.7 Render Scheduler Batching & Incremental Updates ---
+{
+  const prevHeadless = state.headless;
+  const prevDoc = globalThis.document;
+  const prevRAF = globalThis.requestAnimationFrame;
+  let rafCallback = null;
+
+  try {
+    state.headless = false;
+    const planeBadgeStub = createMockElement("div", "plane-badge", "plane-badge");
+    const goldStub = createMockElement("span", "player-gold", "");
+    const handCountStub = createMockElement("span", "hand-count", "");
+    globalThis.document = {
+      getElementById: (id) => {
+        if (id === "plane-badge") return planeBadgeStub;
+        if (id === "player-gold") return goldStub;
+        if (id === "hand-count") return handCountStub;
+        return null;
+      },
+      querySelector: () => null,
+      querySelectorAll: () => []
+    };
+    globalThis.requestAnimationFrame = (cb) => {
+      rafCallback = cb;
+      return 101;
+    };
+
+    state.gold = 42;
+    state.hand = [cloneCard("forest"), cloneCard("mountain")];
+    goldStub.textContent = "$0";
+    handCountStub.textContent = "0";
+
+    // Schedule two separate partial renders ("stats" and "hand") and flush once
+    scheduleRender(["stats"]);
+    scheduleRender(["hand"]);
+    assert(typeof rafCallback === "function", "6.7.1 scheduleRender queues a single animation frame callback");
+    const flushed = flushScheduledRender();
+    assert(
+      flushed === true && goldStub.textContent === "$42" && handCountStub.textContent === "2",
+      "6.7.2 flushScheduledRender batches queued sections ('stats' + 'hand') into a single incremental pass"
+    );
+  } finally {
+    state.headless = prevHeadless;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevRAF === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = prevRAF;
+  }
+}
+
+// --- 6.8 Randomized Stress Test for Repeated Save/Restore Cycles ---
+{
+  const prevHeadless = state.headless;
+  const prevDoc = globalThis.document;
+  const prevLS = globalThis.localStorage;
+  const memStore = createMemoryStorage();
+
+  // Deterministic PRNG (Mulberry32)
+  let seed = 0x9E3779B9;
+  const rand = () => {
+    let t = (seed += 0x6D2B79F5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+
+  let allCyclesPassed = true;
+  try {
+    state.headless = false;
+    globalThis.document = {};
+    globalThis.localStorage = memStore;
+
+    for (let cycle = 0; cycle < 25; cycle++) {
+      const deckChoice = STARTER_DECKS[cycle % STARTER_DECKS.length];
+      startNewRun(deckChoice);
+      state.encounterIdx = Math.floor(rand() * ENCOUNTERS.length);
+      state.playerLife = 1 + Math.floor(rand() * MAX_LIFE);
+      state.gold = Math.floor(rand() * 50);
+      state.turn = 1 + Math.floor(rand() * 4);
+      state.manaPool.G = Math.floor(rand() * 5);
+      state.manaPool.R = Math.floor(rand() * 5);
+      const inShop = rand() > 0.5;
+      if (inShop) {
+        generateShopStock(false);
+      }
+
+      const expectedLife = state.playerLife;
+      const expectedGold = state.gold;
+      const expectedEnc = state.encounterIdx;
+      const expectedTurn = state.turn;
+      const expectedDeckLen = state.masterDeck.length;
+      const expectedHandIds = state.hand.map(c => c.id).join(",");
+
+      const saved = saveRunState(inShop);
+      if (!saved) {
+        allCyclesPassed = false;
+        break;
+      }
+
+      // Every 4th cycle, simulate primary save corruption to stress backup auto-recovery
+      if (cycle % 4 === 3) {
+        memStore.setItem(SAVE_KEY, '{"corrupt":true,');
+      }
+
+      // Scramble live state before restoring
+      state.playerLife = 1;
+      state.gold = 0;
+      state.encounterIdx = 0;
+      state.hand = [];
+      state.runOver = cycle % 5 === 0;
+
+      const restored = loadRunState();
+      if (
+        !restored ||
+        state.runOver !== false ||
+        state.playerLife !== expectedLife ||
+        state.gold !== expectedGold ||
+        state.encounterIdx !== expectedEnc ||
+        state.masterDeck.length !== expectedDeckLen ||
+        (!inShop && (state.turn !== expectedTurn || state.hand.map(c => c.id).join(",") !== expectedHandIds))
+      ) {
+        allCyclesPassed = false;
+        break;
+      }
+    }
+  } finally {
+    state.headless = prevHeadless;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevLS === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevLS;
+  }
+
+  assert(
+    allCyclesPassed === true,
+    "6.8 Randomized 25-cycle save/restore stress test preserves deck, hand, turn, mana, shop state, and recovers from injected corruption"
   );
 }
 

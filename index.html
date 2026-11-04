@@ -90,16 +90,20 @@
 
       <!-- Deck / Graveyard / Starter Deck Controls -->
       <section class="deck-zones-panel">
-        <button type="button" class="zone-btn" id="btn-view-library">
+        <button type="button" class="zone-btn" id="btn-view-library" title="Inspect remaining cards in Library (Shortcut: L)">
           <span>📚 Library</span>
           <strong id="library-count">33</strong>
         </button>
-        <button type="button" class="zone-btn" id="btn-view-graveyard">
+        <button type="button" class="zone-btn" id="btn-view-graveyard" title="Inspect Graveyard (Shortcut: G)">
           <span>🪦 Graveyard</span>
           <strong id="graveyard-count">0</strong>
         </button>
-        <button type="button" class="zone-btn" id="btn-new-run">
+        <button type="button" class="zone-btn" id="btn-new-run" title="Start a new run or switch Planeswalker guild">
           <span>🔄 New Run / Deck</span>
+        </button>
+        <button type="button" class="zone-btn" id="btn-desktop-settings" title="Desktop Display, Fullscreen & Save Manager (Shortcut: ,)">
+          <span>⚙️ Desktop &amp; Saves</span>
+          <strong id="desktop-mode-badge">APP</strong>
         </button>
       </section>
     </aside>
@@ -329,10 +333,104 @@
     </div>
   </dialog>
 
+  <!-- MODAL 7: Desktop App Settings, Window Controls & Save Manager -->
+  <dialog id="settings-dialog" closedby="any" aria-labelledby="settings-title">
+    <div class="modal-inner settings-modal">
+      <header class="modal-header">
+        <div>
+          <span class="plane-badge" id="settings-runtime-badge">DESKTOP APP • NATIVE ENGINE</span>
+          <h2 id="settings-title">Desktop &amp; Sanctum Settings</h2>
+        </div>
+        <form method="dialog">
+          <button type="submit" class="btn-close">✕ Close</button>
+        </form>
+      </header>
+
+      <div class="settings-sections">
+        <section class="settings-card">
+          <h3>🖥️ Display &amp; Window Controls</h3>
+          <div class="settings-row">
+            <div class="settings-label-col">
+              <strong>Window Mode</strong>
+              <small>Toggle native borderless fullscreen (<kbd>F11</kbd> or <kbd>⌃⌘F</kbd>)</small>
+            </div>
+            <button type="button" class="btn-secondary" id="btn-toggle-fullscreen">🖥️ Toggle Fullscreen</button>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-label-col">
+              <strong>Interface Scale</strong>
+              <small>Adjust HUD and card table sizing for your display</small>
+            </div>
+            <div class="segmented-group" id="settings-scale-group" role="group" aria-label="Interface Scale">
+              <button type="button" class="seg-btn" data-ui-scale="90">90%</button>
+              <button type="button" class="seg-btn active" data-ui-scale="100">100%</button>
+              <button type="button" class="seg-btn" data-ui-scale="110">110%</button>
+              <button type="button" class="seg-btn" data-ui-scale="120">120%</button>
+            </div>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-label-col">
+              <strong>Card Physics &amp; Motion</strong>
+              <small>Spring drag physics, 3D tilt, and foil shimmer</small>
+            </div>
+            <div class="segmented-group" id="settings-motion-group" role="group" aria-label="Motion Mode">
+              <button type="button" class="seg-btn active" data-motion-mode="system">System</button>
+              <button type="button" class="seg-btn" data-motion-mode="full">Full Physics</button>
+              <button type="button" class="seg-btn" data-motion-mode="reduced">Reduced</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-card">
+          <h3>💾 Sanctum Save Manager</h3>
+          <div class="save-summary-box" id="settings-save-summary">
+            Active run automatically saved to local Sanctum storage.
+          </div>
+          <div class="settings-actions-row">
+            <button type="button" class="btn-secondary" id="btn-export-save">💾 Export Save (.json)</button>
+            <button type="button" class="btn-secondary" id="btn-copy-save">📋 Copy Save JSON</button>
+            <button type="button" class="btn-secondary" id="btn-toggle-import-save">📂 Import Save Backup</button>
+          </div>
+          <div class="settings-import-box" id="settings-import-box" hidden>
+            <label class="import-file-label" for="input-import-file">
+              Select a <code>.json</code> backup file or paste save JSON below:
+            </label>
+            <input type="file" id="input-import-file" accept=".json,application/json" />
+            <textarea id="textarea-import-save" rows="4" placeholder='{"format":"manastorm-save-backup","version":1,...}'></textarea>
+            <div class="settings-actions-row">
+              <button type="button" class="btn-combat" id="btn-confirm-import-save">⚡ Restore Imported Run</button>
+            </div>
+          </div>
+          <p class="settings-status-msg" id="settings-status-msg" aria-live="polite" hidden></p>
+        </section>
+
+        <section class="settings-card">
+          <h3>⌨️ Desktop Hotkeys</h3>
+          <div class="hotkey-grid">
+            <div class="hotkey-item"><kbd>1</kbd>–<kbd>9</kbd> <span>Play Card from Hand</span></div>
+            <div class="hotkey-item"><kbd>Space</kbd> <span>Resolve Combat &amp; End Turn</span></div>
+            <div class="hotkey-item"><kbd>M</kbd> <span>Turn-1 Free Mulligan</span></div>
+            <div class="hotkey-item"><kbd>L</kbd> / <kbd>G</kbd> <span>Inspect Library / Graveyard</span></div>
+            <div class="hotkey-item"><kbd>F11</kbd> <span>Toggle Fullscreen</span></div>
+            <div class="hotkey-item"><kbd>,</kbd> <span>Desktop &amp; Save Settings</span></div>
+          </div>
+        </section>
+      </div>
+
+      <footer class="modal-footer">
+        <button type="button" class="btn-secondary" id="btn-settings-newrun">🔄 Start New Run / Switch Deck</button>
+        <button type="button" class="btn-danger" id="btn-quit-desktop">🚪 Save &amp; Quit to Desktop</button>
+      </footer>
+    </div>
+  </dialog>
+
   <script src="data/cards.js"></script>
   <script src="data/relics.js"></script>
   <script src="mana.js"></script>
   <script src="combat.js"></script>
+  <script src="desktop.js"></script>
   <script src="ui.js"></script>
   <script src="game.js"></script>
 </body>

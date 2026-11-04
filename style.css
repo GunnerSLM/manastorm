@@ -547,6 +547,14 @@ button {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 600px auto 130px;
+}
+
+@supports not (content-visibility: auto) {
+  .board-lane {
+    contain: layout style paint;
+  }
 }
 
 .enemy-lane {
@@ -834,6 +842,8 @@ button {
   flex-shrink: 0;
   position: relative;
   touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 
   /* Custom property defaults */
   --fan-rot: 0deg;
@@ -2599,4 +2609,213 @@ dialog::backdrop {
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* ===== 7. DESKTOP APP SHELL, UI SCALING & SETTINGS MODAL ===== */
+html[data-ui-scale="90"] { font-size: 90%; }
+html[data-ui-scale="100"] { font-size: 100%; }
+html[data-ui-scale="110"] { font-size: 110%; }
+html[data-ui-scale="120"] { font-size: 120%; }
+
+body.desktop-app-mode {
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+body.desktop-app-mode input,
+body.desktop-app-mode textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+#desktop-mode-badge {
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 99px;
+  background: rgba(255, 190, 59, 0.16);
+  border: 1px solid rgba(255, 190, 59, 0.42);
+  color: var(--gold-amber);
+}
+
+.settings-modal {
+  max-width: 680px;
+  width: min(92vw, 680px);
+}
+
+.settings-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.settings-card {
+  background: rgba(13, 17, 28, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-card h3 {
+  font-size: 0.86rem;
+  font-weight: 800;
+  color: var(--gold-amber);
+  letter-spacing: 0.04em;
+  margin: 0;
+}
+
+.settings-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-label-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-label-col strong {
+  font-size: 0.82rem;
+  color: var(--text-main);
+}
+
+.settings-label-col small {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.segmented-group {
+  display: inline-flex;
+  background: #0b0e17;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.seg-btn {
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 0.74rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.seg-btn:hover {
+  color: var(--text-main);
+}
+
+.seg-btn.active {
+  background: #253254;
+  color: #ffe299;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.save-summary-box {
+  background: rgba(24, 32, 54, 0.65);
+  border: 1px solid rgba(112, 181, 255, 0.25);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #dce4f7;
+}
+
+.save-summary-box small {
+  color: #9bb0d4;
+  font-size: 0.7rem;
+}
+
+.settings-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-import-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.15);
+}
+
+.import-file-label {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+#textarea-import-save {
+  width: 100%;
+  background: #080a11;
+  color: #dceeff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  resize: vertical;
+}
+
+.settings-status-msg {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 7px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  background: rgba(38, 208, 124, 0.15);
+  border: 1px solid rgba(38, 208, 124, 0.45);
+  color: #b8ffda;
+}
+
+.settings-status-msg.error {
+  background: rgba(255, 71, 87, 0.18);
+  border-color: rgba(255, 71, 87, 0.5);
+  color: #ffd4d8;
+}
+
+.hotkey-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  font-size: 0.76rem;
+}
+
+.hotkey-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+.hotkey-item span {
+  color: var(--text-main);
+}
+
+.btn-danger {
+  background: linear-gradient(135deg, #b52b38, #7d1924);
+  color: #fff;
+  border: 1px solid rgba(255, 118, 130, 0.55);
+  border-radius: 9px;
+  padding: 9px 14px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.btn-danger:hover {
+  filter: brightness(1.12);
 }

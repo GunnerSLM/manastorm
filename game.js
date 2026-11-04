@@ -1,6 +1,21 @@
 // MANASTORM — Core Game State, Turn Loop, Card Effects, Shop & LocalStorage Persistence
 
 const SAVE_KEY = "manastorm_saved_run_v1";
+const SAVE_BACKUP_STORE_KEY = typeof SAVE_BACKUP_KEY !== "undefined" ? SAVE_BACKUP_KEY : "manastorm_saved_run_backup_v1";
+const SAVE_CORRUPT_STORE_KEY = typeof SAVE_CORRUPT_KEY !== "undefined" ? SAVE_CORRUPT_KEY : "manastorm_saved_run_corrupt_v1";
+
+function getSafeLocalStorage() {
+  try {
+    if (
+      typeof localStorage !== "undefined" &&
+      localStorage &&
+      (typeof localStorage.getItem === "function" || typeof localStorage.setItem === "function")
+    ) {
+      return localStorage;
+    }
+  } catch (_) {}
+  return null;
+}
 
 const state = {
   headless: false,
@@ -40,7 +55,8 @@ const state = {
 
   shopStock: { relics: [], cards: [], upgrades: [] },
   turnStats: { spells: 0, landfalls: 0, graveTriggers: 0 },
-  synTiers: {}
+  synTiers: {},
+  lastSaveError: null
 };
 
 let uidCounter = 1;
@@ -980,24 +996,17 @@ function handleEncounterVictory() {
   // Between-encounter victory recovery (Step 1)
   const healed = gainLife(VICTORY_HEAL, "Victory Recovery");
 
-  if (!isHeadlessEnv()) {
-    document.getElementById("shop-plane-badge").textContent =
-      `VICTORY • ${enc.name.toUpperCase()} DEFEATED!`;
-    document.getElementById("shop-reward-summary").textContent =
-      `Earned $${enc.reward} Ward Bounty + $${unusedTurnsBonus} Unused Turn Bonus + $${interest} Interest ($${earned} Total)${healed > 0 ? ` • Restored +${healed} Life` : ""}. Sculpt your deck before the next encounter!`;
-  }
-
   generateShopStock(false);
   saveRunState(true);
   renderShop();
   renderAll();
 
   if (!isHeadlessEnv()) {
-    // Show Victory Screen when completing Plane 2's Final Boss (Elesh Norn)
-    if (state.encounterIdx === ENCOUNTERS.length - 1) {
-      openVictoryModal(enc, earned, healed);
-    } else {
-      document.getElementById("shop-dialog").showModal();
+    const badgeText = `VICTORY • ${enc.name.toUpperCase()} DEFEATED!`;
+    const summaryText =
+      `Earned $${enc.reward} Ward Bounty + $${unusedTurnsBonus} Unused Turn Bonus + $${interest} Interest ($${earned} Total)${healed > 0 ? ` • Restored +${healed} Life` : ""}. Sculpt your deck before the next encounter!`;
+    if (typeof presentVictoryOrShopModal === "function") {
+      presentVictoryOrShopModal(enc, earned, healed, badgeText, summaryText);
     }
   }
 }
@@ -1244,7 +1253,8 @@ function sellRelic(id) {
   const value = Math.floor((r.cost || 4) / 2);
   state.gold += value;
   spawnFx(`Sold ${r.name} for $${value}`, "#ffbe3b");
-  if (!isHeadlessEnv() && document.getElementById("shop-dialog").open) {
+  const shopOpen = typeof isShopDialogOpen === "function" ? isShopDialogOpen() : false;
+  if (!isHeadlessEnv() && shopOpen) {
     saveRunState(true);
     renderShop();
   }
@@ -1257,7 +1267,11 @@ function moveRelic(idx, dir) {
   if (idx < 0 || idx >= state.relics.length || targetIdx < 0 || targetIdx >= state.relics.length) return;
   const [item] = state.relics.splice(idx, 1);
   state.relics.splice(targetIdx, 0, item);
-  renderAll();
+  if (typeof renderIncremental === "function") {
+    renderIncremental(["command"]);
+  } else {
+    renderAll();
+  }
 }
 
 // === CONSUMABLE ARCANE SCROLLS ===
@@ -1329,7 +1343,181 @@ function useConsumable(uid) {
   renderAll();
 }
 
-// === LOCALSTORAGE RUN PERSISTENCE (Step 5) ===
+// === CANONICAL SAVE SCHEMA, SNAPSHOT OWNERSHIP & RECOVERY (Fixes #1, #2, #7) ===
+
+function fallbackComputeSaveChecksum(saveObj) {
+  if (typeof computeSaveChecksum === "function" && computeSaveChecksum !== fallbackComputeSaveChecksum) {
+    return computeSaveChecksum(saveObj);
+  }
+  if (!saveObj || typeof saveObj !== "object") return "fnv1a_00000000";
+  const canonicalCore = {
+    version: Number(saveObj.version) || 1,
+    inShop: Boolean(saveObj.inShop),
+    archetypeId: String(saveObj.archetypeId || ""),
+    encounterIdx: Number(saveObj.encounterIdx) || 0,
+    playerLife: Number(saveObj.playerLife) || 20,
+    gold: Number(saveObj.gold) || 0,
+    masterDeck: Array.isArray(saveObj.masterDeck)
+      ? saveObj.masterDeck.map(c => ({
+          id: c && c.id ? String(c.id) : "",
+          foil: (c && c.foil) || null,
+          permPowerBonus: Number(c && c.permPowerBonus) || 0,
+          permToughnessBonus: Number(c && c.permToughnessBonus) || 0,
+          keywords: Array.isArray(c && c.keywords) ? [...c.keywords] : []
+        }))
+      : [],
+    relicIds: Array.isArray(saveObj.relicIds)
+      ? saveObj.relicIds.map(String)
+      : (Array.isArray(saveObj.relics) ? saveObj.relics.map(r => String((r && r.id) || r || "")).filter(Boolean) : []),
+    consumableIds: Array.isArray(saveObj.consumableIds)
+      ? saveObj.consumableIds.map(String)
+      : (Array.isArray(saveObj.consumables) ? saveObj.consumables.map(s => String((s && s.id) || s || "")).filter(Boolean) : [])
+  };
+  const str = JSON.stringify(canonicalCore);
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `fnv1a_${hash.toString(16).padStart(8, "0")}`;
+}
+
+function isValidEncounterSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return false;
+  if (
+    !Array.isArray(snapshot.library) ||
+    !Array.isArray(snapshot.hand) ||
+    !Array.isArray(snapshot.graveyard) ||
+    !Array.isArray(snapshot.playerLands) ||
+    !Array.isArray(snapshot.playerCreatures) ||
+    !Array.isArray(snapshot.enemyCreatures)
+  ) {
+    return false;
+  }
+  if (snapshot.manaPool !== undefined && (!snapshot.manaPool || typeof snapshot.manaPool !== "object")) {
+    return false;
+  }
+  return true;
+}
+
+function normalizeCanonicalSave(candidate) {
+  if (typeof DesktopBridge !== "undefined" && typeof DesktopBridge.normalizeSaveObject === "function") {
+    return DesktopBridge.normalizeSaveObject(candidate);
+  }
+  if (typeof normalizeSaveObject === "function") {
+    return normalizeSaveObject(candidate);
+  }
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return { valid: false, status: "invalid_type", error: "Save data must be a JSON object." };
+  }
+  const raw = candidate.format === "manastorm-save-backup" && candidate.save && typeof candidate.save === "object"
+    ? candidate.save
+    : candidate;
+  const working = { ...raw };
+  let migrated = false;
+  if (working.version === undefined || working.version === 0 || working.version === "1" || working.version === "1.0") {
+    working.version = 1;
+    if (!Array.isArray(working.masterDeck) && Array.isArray(working.deck)) {
+      working.masterDeck = working.deck;
+    }
+    if (!Array.isArray(working.relicIds) && Array.isArray(working.relics)) {
+      working.relicIds = working.relics.map(r => (typeof r === "string" ? r : r?.id)).filter(Boolean);
+    }
+    if (!Array.isArray(working.consumableIds) && Array.isArray(working.consumables)) {
+      working.consumableIds = working.consumables.map(s => (typeof s === "string" ? s : s?.id)).filter(Boolean);
+    }
+    migrated = true;
+  }
+  if (working.version !== 1 || !Array.isArray(working.masterDeck) || working.masterDeck.length === 0) {
+    return { valid: false, status: "unsupported_version", error: "Invalid MANASTORM v1 save format or empty deck." };
+  }
+  const normalizedDeck = working.masterDeck
+    .map(item => {
+      const id = typeof item === "string" ? item : item?.id;
+      if (!id || (typeof CARD_DB !== "undefined" && !CARD_DB[id])) return null;
+      return {
+        id: String(id),
+        foil: (item && item.foil) || null,
+        permPowerBonus: Number(item && item.permPowerBonus) || 0,
+        permToughnessBonus: Number(item && item.permToughnessBonus) || 0,
+        keywords: Array.isArray(item && item.keywords) ? [...item.keywords] : []
+      };
+    })
+    .filter(Boolean);
+  if (normalizedDeck.length === 0) {
+    return { valid: false, status: "unrecognized_cards", error: "Save deck contains no recognized MANASTORM cards." };
+  }
+  const relicIds = Array.isArray(working.relicIds)
+    ? working.relicIds.filter(id => typeof id === "string" && (typeof RELIC_DB === "undefined" || RELIC_DB.some(r => r.id === id)))
+    : (Array.isArray(working.relics)
+      ? working.relics.map(r => (typeof r === "string" ? r : r?.id)).filter(id => typeof id === "string" && (typeof RELIC_DB === "undefined" || RELIC_DB.some(r => r.id === id)))
+      : []);
+  const consumableIds = Array.isArray(working.consumableIds)
+    ? working.consumableIds.filter(id => typeof id === "string" && (typeof CONSUMABLE_DB === "undefined" || CONSUMABLE_DB.some(s => s.id === id)))
+    : (Array.isArray(working.consumables)
+      ? working.consumables.map(s => (typeof s === "string" ? s : s?.id)).filter(id => typeof id === "string" && (typeof CONSUMABLE_DB === "undefined" || CONSUMABLE_DB.some(s => s.id === id)))
+      : []);
+  const matchedArch = STARTER_DECKS.find(d => d.id === working.archetypeId) || STARTER_DECKS[0];
+  const inShop = Boolean(working.inShop);
+  const canonicalSave = {
+    version: 1,
+    savedAt: Number.isFinite(Number(working.savedAt)) && Number(working.savedAt) > 0 ? Number(working.savedAt) : 0,
+    inShop,
+    archetypeId: matchedArch ? matchedArch.id : String(working.archetypeId || STARTER_DECKS[0].id),
+    encounterIdx: Math.max(0, Math.floor(Number(working.encounterIdx) || 0)),
+    playerLife: Math.min(MAX_LIFE, Math.max(1, Math.round(Number(working.playerLife) || START_LIFE))),
+    gold: Math.max(0, Math.floor(Number(working.gold) || 0)),
+    masterDeck: normalizedDeck,
+    relicIds,
+    relics: relicIds.map(id => ({ id })),
+    consumableIds,
+    encounterState: !inShop && isValidEncounterSnapshot(working.encounterState) ? working.encounterState : null,
+    shopStock: inShop && working.shopStock && typeof working.shopStock === "object"
+      ? {
+          relics: Array.isArray(working.shopStock.relics) ? working.shopStock.relics : [],
+          cards: Array.isArray(working.shopStock.cards) ? working.shopStock.cards : [],
+          upgrades: Array.isArray(working.shopStock.upgrades) ? working.shopStock.upgrades : []
+        }
+      : null
+  };
+  const expectedChecksum = fallbackComputeSaveChecksum(canonicalSave);
+  if (typeof working.saveIntegrity === "string" && working.saveIntegrity.length > 0) {
+    const rawChecksum = fallbackComputeSaveChecksum(working);
+    if (working.saveIntegrity !== expectedChecksum && working.saveIntegrity !== rawChecksum) {
+      return {
+        valid: false,
+        status: "corrupt_checksum",
+        error: "Save integrity check failed (corrupted or tampered save payload)."
+      };
+    }
+  }
+  canonicalSave.saveIntegrity = expectedChecksum;
+  return {
+    valid: true,
+    status: migrated ? "migrated" : "ok",
+    migrated,
+    save: canonicalSave,
+    summary: {
+      archetype: matchedArch ? matchedArch.badge : canonicalSave.archetypeId,
+      encounter: canonicalSave.encounterIdx + 1,
+      playerLife: canonicalSave.playerLife,
+      gold: canonicalSave.gold,
+      deckSize: normalizedDeck.length,
+      inShop
+    }
+  };
+}
+
+function deepCloneSaveData(val) {
+  if (val === null || typeof val !== "object") return val;
+  if (Array.isArray(val)) return val.map(deepCloneSaveData);
+  const out = {};
+  for (const k of Object.keys(val)) {
+    out[k] = deepCloneSaveData(val[k]);
+  }
+  return out;
+}
+
 function createEncounterSaveSnapshot() {
   const fields = [
     "library",
@@ -1358,148 +1546,374 @@ function createEncounterSaveSnapshot() {
     "consumables"
   ];
   const snapshot = { uidCounter };
-  fields.forEach(field => { snapshot[field] = state[field]; });
+  fields.forEach(field => { snapshot[field] = deepCloneSaveData(state[field]); });
   return snapshot;
 }
 
 function restoreEncounterSaveSnapshot(snapshot) {
-  if (!snapshot || !Array.isArray(snapshot.library) || !Array.isArray(snapshot.hand)
-    || !Array.isArray(snapshot.graveyard) || !Array.isArray(snapshot.playerLands)
-    || !Array.isArray(snapshot.playerCreatures) || !Array.isArray(snapshot.enemyCreatures)) {
+  if (!isValidEncounterSnapshot(snapshot)) {
     return false;
   }
-  Object.keys(snapshot).forEach(field => {
+  const cloned = deepCloneSaveData(snapshot);
+  Object.keys(cloned).forEach(field => {
     if (field !== "uidCounter" && Object.prototype.hasOwnProperty.call(state, field)) {
-      state[field] = snapshot[field];
+      state[field] = cloned[field];
     }
   });
-  if (Number.isInteger(snapshot.uidCounter) && snapshot.uidCounter > 0) {
-    uidCounter = snapshot.uidCounter;
+  if (Number.isInteger(cloned.uidCounter) && cloned.uidCounter > 0) {
+    uidCounter = cloned.uidCounter;
   }
   state.runOver = false;
   state.combatLocked = false;
   return true;
 }
 
+function createFullRunSnapshot() {
+  return {
+    uidCounter,
+    headless: state.headless,
+    runOver: state.runOver,
+    combatLocked: state.combatLocked,
+    deckArchetype: state.deckArchetype,
+    masterDeck: deepCloneSaveData(state.masterDeck),
+    relics: deepCloneSaveData(state.relics),
+    consumables: deepCloneSaveData(state.consumables),
+    encounterIdx: state.encounterIdx,
+    playerLife: state.playerLife,
+    gold: state.gold,
+    shopStock: deepCloneSaveData(state.shopStock),
+    encounterState: createEncounterSaveSnapshot()
+  };
+}
+
+function restoreFullRunSnapshot(fullSnapshot) {
+  if (!fullSnapshot || typeof fullSnapshot !== "object") return false;
+  state.headless = Boolean(fullSnapshot.headless);
+  state.runOver = Boolean(fullSnapshot.runOver);
+  state.combatLocked = Boolean(fullSnapshot.combatLocked);
+  state.deckArchetype = fullSnapshot.deckArchetype || STARTER_DECKS[0];
+  state.masterDeck = deepCloneSaveData(fullSnapshot.masterDeck || []);
+  state.relics = deepCloneSaveData(fullSnapshot.relics || []);
+  state.consumables = deepCloneSaveData(fullSnapshot.consumables || []);
+  state.encounterIdx = Number(fullSnapshot.encounterIdx) || 0;
+  state.playerLife = Number(fullSnapshot.playerLife) || START_LIFE;
+  state.gold = Number(fullSnapshot.gold) || 0;
+  state.shopStock = deepCloneSaveData(fullSnapshot.shopStock || { relics: [], cards: [], upgrades: [] });
+  if (fullSnapshot.encounterState) {
+    restoreEncounterSaveSnapshot(fullSnapshot.encounterState);
+  }
+  uidCounter = Number(fullSnapshot.uidCounter) || uidCounter;
+  return true;
+}
+
+function createCanonicalSavePayload(inShop = false) {
+  const rawPayload = {
+    version: 1,
+    savedAt: Date.now(),
+    inShop: Boolean(inShop),
+    archetypeId: (state.deckArchetype && state.deckArchetype.id) || STARTER_DECKS[0].id,
+    encounterIdx: state.encounterIdx,
+    playerLife: state.playerLife,
+    gold: state.gold,
+    masterDeck: state.masterDeck.map(c => ({
+      id: c.id,
+      foil: c.foil || null,
+      permPowerBonus: c.permPowerBonus || 0,
+      permToughnessBonus: c.permToughnessBonus || 0,
+      keywords: [...(c.keywords || [])]
+    })),
+    relicIds: state.relics.map(r => r.id),
+    relics: state.relics.map(r => ({ id: r.id })),
+    consumableIds: state.consumables.map(s => s.id),
+    encounterState: inShop ? null : createEncounterSaveSnapshot(),
+    shopStock: inShop ? deepCloneSaveData(state.shopStock) : null
+  };
+  const check = normalizeCanonicalSave(rawPayload);
+  return check.valid ? check.save : rawPayload;
+}
+
 function saveRunState(inShop = false) {
-  if (isHeadlessEnv() || typeof localStorage === "undefined" || state.runOver) return;
+  const storage = getSafeLocalStorage();
+  if (isHeadlessEnv() || !storage || typeof storage.setItem !== "function" || state.runOver) return false;
   try {
-    const payload = {
-      version: 1,
-      inShop: Boolean(inShop),
-      archetypeId: state.deckArchetype.id,
-      encounterIdx: state.encounterIdx,
-      playerLife: state.playerLife,
-      gold: state.gold,
-      masterDeck: state.masterDeck.map(c => ({
-        id: c.id,
-        foil: c.foil || null,
-        permPowerBonus: c.permPowerBonus || 0,
-        permToughnessBonus: c.permToughnessBonus || 0,
-        keywords: c.keywords || []
-      })),
-      relicIds: state.relics.map(r => r.id),
-      consumableIds: state.consumables.map(s => s.id),
-      encounterState: inShop ? null : createEncounterSaveSnapshot(),
-      shopStock: inShop ? state.shopStock : null
-    };
-    localStorage.setItem(SAVE_KEY, JSON.stringify(payload));
+    // Preserve previous valid save as known-good backup before overwriting
+    const existingRaw = typeof storage.getItem === "function" ? storage.getItem(SAVE_KEY) : null;
+    if (existingRaw) {
+      try {
+        const existingCheck = normalizeCanonicalSave(JSON.parse(existingRaw));
+        if (existingCheck.valid) {
+          storage.setItem(SAVE_BACKUP_STORE_KEY, JSON.stringify(existingCheck.save));
+        }
+      } catch (_) {}
+    }
+
+    const payload = createCanonicalSavePayload(inShop);
+    const serialized = JSON.stringify(payload);
+    storage.setItem(SAVE_KEY, serialized);
+    storage.setItem(SAVE_BACKUP_STORE_KEY, serialized);
+    if (typeof DesktopBridge !== "undefined") {
+      DesktopBridge.syncSaveToDisk(serialized);
+    }
+    state.lastSaveError = null;
+    return true;
   } catch (error) {
     console.error("Unable to save the current run:", error);
+    state.lastSaveError = String(error?.message || error);
+    return false;
   }
 }
 
 function clearRunState() {
-  if (isHeadlessEnv() || typeof localStorage === "undefined") return;
+  const storage = getSafeLocalStorage();
+  if (isHeadlessEnv() || !storage) return;
   try {
-    localStorage.removeItem(SAVE_KEY);
+    if (typeof storage.removeItem === "function") {
+      storage.removeItem(SAVE_KEY);
+      storage.removeItem(SAVE_BACKUP_STORE_KEY);
+    }
+    if (typeof DesktopBridge !== "undefined") {
+      DesktopBridge.clearDiskSave();
+    }
   } catch (_) {}
 }
 
-function loadRunState() {
-  if (isHeadlessEnv() || typeof localStorage === "undefined") return false;
-  try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    if (!raw) return false;
-    const saved = JSON.parse(raw);
-    if (!saved || saved.version !== 1 || !Array.isArray(saved.masterDeck)) return false;
+function applyCanonicalSaveToState(saved, recoveredFromBackup = false) {
+  const arch = STARTER_DECKS.find(d => d.id === saved.archetypeId) || STARTER_DECKS[0];
+  state.deckArchetype = arch;
+  state.encounterIdx = Number(saved.encounterIdx) || 0;
+  state.playerLife = Math.min(MAX_LIFE, Math.max(1, Number(saved.playerLife) || START_LIFE));
+  state.gold = Math.max(0, Number(saved.gold) || 0);
+  state.runOver = false;
+  state.combatLocked = false;
 
-    const arch = STARTER_DECKS.find(d => d.id === saved.archetypeId) || STARTER_DECKS[0];
-    state.deckArchetype = arch;
-    state.encounterIdx = Number(saved.encounterIdx) || 0;
-    state.playerLife = Math.min(MAX_LIFE, Math.max(1, Number(saved.playerLife) || START_LIFE));
-    state.gold = Math.max(0, Number(saved.gold) || 0);
-    state.runOver = false;
-    state.combatLocked = false;
+  state.masterDeck = saved.masterDeck
+    .filter(sc => CARD_DB[sc.id])
+    .map(sc => {
+      const card = cloneCard(sc.id);
+      card.foil = sc.foil || null;
+      card.permPowerBonus = sc.permPowerBonus || 0;
+      card.permToughnessBonus = sc.permToughnessBonus || 0;
+      if (Array.isArray(sc.keywords)) {
+        sc.keywords.forEach(kw => {
+          if (!card.keywords.includes(kw)) card.keywords.push(kw);
+        });
+      }
+      return card;
+    });
 
-    state.masterDeck = saved.masterDeck
-      .filter(sc => CARD_DB[sc.id])
-      .map(sc => {
-        const card = cloneCard(sc.id);
-        card.foil = sc.foil || null;
-        card.permPowerBonus = sc.permPowerBonus || 0;
-        card.permToughnessBonus = sc.permToughnessBonus || 0;
-        if (Array.isArray(sc.keywords)) {
-          sc.keywords.forEach(kw => {
-            if (!card.keywords.includes(kw)) card.keywords.push(kw);
-          });
-        }
-        return card;
-      });
+  const relicIdList = Array.isArray(saved.relicIds)
+    ? saved.relicIds
+    : (Array.isArray(saved.relics) ? saved.relics.map(r => (typeof r === "string" ? r : r?.id)) : []);
+  state.relics = relicIdList
+    .map(id => RELIC_DB.find(r => r.id === id))
+    .filter(Boolean)
+    .map(r => ({ ...r }));
 
-    state.relics = (saved.relicIds || [])
-      .map(id => RELIC_DB.find(r => r.id === id))
-      .filter(Boolean)
-      .map(r => ({ ...r }));
+  const consumableIdList = Array.isArray(saved.consumableIds)
+    ? saved.consumableIds
+    : (Array.isArray(saved.consumables) ? saved.consumables.map(s => (typeof s === "string" ? s : s?.id)) : []);
+  state.consumables = consumableIdList
+    .map(id => CONSUMABLE_DB.find(s => s.id === id))
+    .filter(Boolean)
+    .map(s => ({ ...s, uid: nextUid() }));
 
-    state.consumables = (saved.consumableIds || [])
-      .map(id => CONSUMABLE_DB.find(s => s.id === id))
-      .filter(Boolean)
-      .map(s => ({ ...s, uid: nextUid() }));
-
+  if (!saved.inShop) {
+    if (!restoreEncounterSaveSnapshot(saved.encounterState)) {
+      if (saved.encounterState) {
+        console.warn("[MANASTORM Save] Encounter snapshot incomplete; restarting encounter with saved deck/relics.");
+      }
+      beginEncounter();
+    }
+  } else {
     if (!restoreEncounterSaveSnapshot(saved.encounterState)) {
       beginEncounter();
     }
-
-    if (saved.inShop && saved.shopStock) {
-      state.enemyLife = 0;
+    state.enemyLife = 0;
+    if (saved.shopStock && typeof saved.shopStock === "object") {
       state.shopStock = {
         relics: (saved.shopStock.relics || []).map(r => {
           const def = RELIC_DB.find(d => d.id === r.id) || r;
           return { ...def, bought: Boolean(r.bought) };
         }),
         cards: (saved.shopStock.cards || []).map(it => ({
-          card: it.card && CARD_DB[it.card.id] ? cloneCard(it.card.id) : cloneCard("evolving_wilds"),
-          cost: it.cost || 3,
-          bought: Boolean(it.bought)
+          card: it && it.card && CARD_DB[it.card.id] ? cloneCard(it.card.id) : cloneCard("evolving_wilds"),
+          cost: (it && it.cost) || 3,
+          bought: Boolean(it && it.bought)
         })),
-        upgrades: saved.shopStock.upgrades || []
+        upgrades: Array.isArray(saved.shopStock.upgrades) ? saved.shopStock.upgrades : []
       };
-      const enc = getCurrentEncounter();
-      document.getElementById("shop-plane-badge").textContent =
-        `SANCTUM RESTORED • ${enc.name.toUpperCase()} DEFEATED!`;
-      document.getElementById("shop-reward-summary").textContent =
-        "Progress restored from Sanctum memory. Finish shopping before entering the next encounter!";
-      renderShop();
-      renderAll();
-      document.getElementById("shop-dialog").showModal();
-      saveRunState(true);
+      if (state.shopStock.upgrades.length === 0) {
+        generateShopStock(false);
+      }
     } else {
-      setLog(`Restored saved run (${arch.badge}, Encounter ${state.encounterIdx + 1})!`);
-      renderAll();
+      generateShopStock(false);
     }
+
+    const enc = getCurrentEncounter();
+    renderShop();
+    renderAll();
+    if (typeof openRestoredShopModal === "function") {
+      openRestoredShopModal(enc);
+    }
+    saveRunState(true);
     return true;
+  }
+
+  const prefix = recoveredFromBackup ? "⚠️ Recovered from backup save: " : "";
+  setLog(`${prefix}Restored saved run (${arch.badge}, Encounter ${state.encounterIdx + 1})!`);
+  renderAll();
+  return true;
+}
+
+function logSaveWarn(...args) {
+  if (typeof console !== "undefined") {
+    const fn = console.warn || console.log;
+    if (typeof fn === "function") fn.apply(console, args);
+  }
+}
+
+function logSaveError(...args) {
+  if (typeof console !== "undefined") {
+    const fn = console.error || console.log;
+    if (typeof fn === "function") fn.apply(console, args);
+  }
+}
+
+function preserveCorruptPrimarySave(storage, rawString, reason) {
+  if (!storage || !rawString) return;
+  try {
+    if (typeof DesktopBridge !== "undefined" && typeof DesktopBridge.preserveCorruptSave === "function") {
+      DesktopBridge.preserveCorruptSave(rawString, reason || "localStorage");
+    } else {
+      storage.setItem(
+        SAVE_CORRUPT_STORE_KEY,
+        JSON.stringify({
+          source: reason || "localStorage",
+          preservedAt: new Date().toISOString(),
+          raw: String(rawString)
+        })
+      );
+    }
+  } catch (_) {}
+}
+
+function loadRunState(options = {}) {
+  const storage = getSafeLocalStorage();
+  if ((isHeadlessEnv() && !options.allowHeadless) || !storage) return false;
+
+  const preRestoreSnapshot = createFullRunSnapshot();
+
+  const tryParseAndValidate = (rawStr) => {
+    if (!rawStr || typeof rawStr !== "string") return { valid: false, status: "empty", error: "No save data." };
+    try {
+      const parsed = JSON.parse(rawStr);
+      return normalizeCanonicalSave(parsed);
+    } catch (err) {
+      return { valid: false, status: "corrupt_json", error: `Corrupt JSON: ${err?.message || err}` };
+    }
+  };
+
+  try {
+    const rawPrimary = storage.getItem(SAVE_KEY);
+    const rawBackup = storage.getItem(SAVE_BACKUP_STORE_KEY);
+
+    if (!rawPrimary && !rawBackup) {
+      return false;
+    }
+
+    if (rawPrimary) {
+      const primaryCheck = tryParseAndValidate(rawPrimary);
+      if (primaryCheck.valid) {
+        const applied = applyCanonicalSaveToState(primaryCheck.save, false);
+        if (applied) {
+          const normalizedStr = JSON.stringify(primaryCheck.save);
+          storage.setItem(SAVE_KEY, normalizedStr);
+          storage.setItem(SAVE_BACKUP_STORE_KEY, normalizedStr);
+          state.lastSaveError = null;
+          return true;
+        }
+      } else {
+        // Primary save failed validation: preserve corrupt payload and DO NOT overwrite backup!
+        logSaveWarn(`[MANASTORM Save] Primary save failed validation (${primaryCheck.status}): ${primaryCheck.error}`);
+        preserveCorruptPrimarySave(storage, rawPrimary, primaryCheck.status);
+        state.lastSaveError = primaryCheck.error;
+      }
+    }
+
+    // Recovery Path: Attempt to restore from known-good backup save
+    if (rawBackup) {
+      const backupCheck = tryParseAndValidate(rawBackup);
+      if (backupCheck.valid) {
+        logSaveWarn("[MANASTORM Save] Recovering run state from last known-good backup save.");
+        const applied = applyCanonicalSaveToState(backupCheck.save, true);
+        if (applied) {
+          const normalizedBackup = JSON.stringify(backupCheck.save);
+          storage.setItem(SAVE_KEY, normalizedBackup);
+          if (typeof DesktopBridge !== "undefined") {
+            DesktopBridge.syncSaveToDisk(normalizedBackup);
+          }
+          return true;
+        }
+      } else {
+        logSaveError(`[MANASTORM Save] Backup save also failed validation (${backupCheck.status}): ${backupCheck.error}`);
+      }
+    }
+
+    // UI-safe fallback when restore fails: roll back partial state mutation and notify player
+    restoreFullRunSnapshot(preRestoreSnapshot);
+    setLog("⚠️ Saved run could not be restored (corrupt data preserved). Starting safe fallback state.");
+    return false;
   } catch (error) {
-    console.error("Unable to restore the saved run:", error);
+    logSaveError("Unable to restore the saved run:", error);
+    restoreFullRunSnapshot(preRestoreSnapshot);
+    state.lastSaveError = String(error?.message || error);
+    setLog("⚠️ Saved run could not be restored due to an unexpected error.");
     return false;
   }
 }
 
-if (typeof window !== "undefined") {
+const GameState = {
+  getState: () => state,
+  createEncounterSaveSnapshot,
+  restoreEncounterSaveSnapshot,
+  createFullRunSnapshot,
+  restoreFullRunSnapshot,
+  createCanonicalSavePayload,
+  normalizeCanonicalSave,
+  saveRunState,
+  loadRunState,
+  clearRunState
+};
+
+if (typeof globalThis !== "undefined") {
+  globalThis.GameState = GameState;
+  globalThis.normalizeCanonicalSave = normalizeCanonicalSave;
+  globalThis.createCanonicalSavePayload = createCanonicalSavePayload;
+  globalThis.createFullRunSnapshot = createFullRunSnapshot;
+  globalThis.restoreFullRunSnapshot = restoreFullRunSnapshot;
+  if (!globalThis.SAVE_BACKUP_KEY) globalThis.SAVE_BACKUP_KEY = SAVE_BACKUP_STORE_KEY;
+  if (!globalThis.SAVE_CORRUPT_KEY) globalThis.SAVE_CORRUPT_KEY = SAVE_CORRUPT_STORE_KEY;
+}
+
+async function bootstrapGame() {
+  initEvents();
+  let restored = false;
+  if (typeof DesktopBridge !== "undefined" && typeof DesktopBridge.init === "function") {
+    const initRes = await DesktopBridge.init();
+    restored = Boolean(initRes && initRes.restoredFromDisk);
+  }
+  if (!restored) {
+    restored = loadRunState();
+  }
+  if (!restored && (!state.masterDeck || state.masterDeck.length === 0)) {
+    startNewRun(STARTER_DECKS[0]);
+  } else {
+    renderAll();
+  }
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("DOMContentLoaded", () => {
-    initEvents();
-    if (!loadRunState()) {
-      startNewRun(STARTER_DECKS[0]);
-    }
+    bootstrapGame();
   });
 }

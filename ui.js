@@ -11,8 +11,89 @@ function isHeadlessEnv() {
   return Boolean((typeof state !== "undefined" && state.headless) || typeof document === "undefined");
 }
 
+// ============================================================================
+// SAFE DOM HELPERS & MODAL LIFECYCLE GUARDS (Fix #5 & #7)
+// ============================================================================
+
+function getEl(idOrEl) {
+  if (!idOrEl) return null;
+  if (typeof idOrEl === "object") return idOrEl;
+  if (typeof document === "undefined" || typeof document.getElementById !== "function") return null;
+  try {
+    return document.getElementById(idOrEl) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function queryEl(selector, root = null) {
+  const base = root || (typeof document !== "undefined" ? document : null);
+  if (!base || typeof base.querySelector !== "function") return null;
+  try {
+    return base.querySelector(selector) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function queryAll(selector, root = null) {
+  const base = root || (typeof document !== "undefined" ? document : null);
+  if (!base || typeof base.querySelectorAll !== "function") return [];
+  try {
+    return Array.from(base.querySelectorAll(selector));
+  } catch (_) {
+    return [];
+  }
+}
+
+function setText(idOrEl, text) {
+  const el = getEl(idOrEl);
+  if (!el) return false;
+  try {
+    const str = String(text ?? "");
+    if (el.textContent !== str) {
+      el.textContent = str;
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function safeShowModal(idOrDialog) {
+  const dlg = getEl(idOrDialog);
+  if (!dlg) return false;
+  try {
+    if (!dlg.open && typeof dlg.showModal === "function") {
+      dlg.showModal();
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function safeCloseModal(idOrDialog) {
+  const dlg = getEl(idOrDialog);
+  if (!dlg) return false;
+  try {
+    if (dlg.open !== false && typeof dlg.close === "function") {
+      dlg.close();
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function isShopDialogOpen() {
+  if (isHeadlessEnv()) return false;
+  const dlg = getEl("shop-dialog");
+  return Boolean(dlg && dlg.open);
+}
+
 function openColorPickerModal(title, desc, choices, allowCancel = false) {
-  if (choices.length === 0) return;
+  if (!Array.isArray(choices) || choices.length === 0) return;
   if (isHeadlessEnv()) {
     // Smart headless choice: prefer a color required by spells in hand that we have least of
     let bestChoice = choices[0];
@@ -40,10 +121,18 @@ function openColorPickerModal(title, desc, choices, allowCancel = false) {
     return;
   }
 
-  const dialog = document.getElementById("color-dialog");
-  document.getElementById("color-dialog-title").textContent = title;
-  document.getElementById("color-dialog-desc").textContent = desc;
-  const closeForm = document.getElementById("color-dialog-close-form");
+  const dialog = getEl("color-dialog");
+  const row = getEl("color-choice-row");
+  if (!dialog || !row) {
+    if (!allowCancel && choices[0] && typeof choices[0].onSelect === "function") {
+      choices[0].onSelect();
+    }
+    return;
+  }
+
+  setText("color-dialog-title", title);
+  setText("color-dialog-desc", desc);
+  const closeForm = getEl("color-dialog-close-form");
   if (closeForm) {
     closeForm.hidden = !allowCancel;
   }
@@ -51,7 +140,6 @@ function openColorPickerModal(title, desc, choices, allowCancel = false) {
   colorDialogAllowCancel = allowCancel;
   colorDialogPendingFallback = !allowCancel && choices.length > 0 ? choices[0].onSelect : null;
 
-  const row = document.getElementById("color-choice-row");
   row.innerHTML = choices.map((ch, idx) => `
     <button type="button" class="color-choice-btn card-color-${ch.colorCode}" data-choice-idx="${idx}">
       <span class="cost-pip cost-pip-${ch.colorCode}">${ch.colorCode}</span>
@@ -60,19 +148,21 @@ function openColorPickerModal(title, desc, choices, allowCancel = false) {
   `).join("");
 
   row.onclick = (e) => {
-    const btn = e.target.closest("[data-choice-idx]");
+    const btn = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-choice-idx]") : null;
     if (!btn) return;
     const idx = Number(btn.dataset.choiceIdx);
     colorDialogPendingFallback = null;
-    dialog.close();
-    choices[idx].onSelect();
+    safeCloseModal(dialog);
+    if (choices[idx] && typeof choices[idx].onSelect === "function") {
+      choices[idx].onSelect();
+    }
   };
 
-  dialog.showModal();
+  safeShowModal(dialog);
 }
 
 function openTargetPickerModal(title, desc, items, renderItemHtml, onPick) {
-  if (items.length === 0) return;
+  if (!Array.isArray(items) || items.length === 0) return;
   if (items.length === 1 || isHeadlessEnv()) {
     onPick(items[0]);
     return;
@@ -87,40 +177,46 @@ function openTargetPickerModal(title, desc, items, renderItemHtml, onPick) {
 }
 
 function showTargetPickerModal({ title, desc, items, renderItemHtml, onPick }) {
-  const dialog = document.getElementById("target-dialog");
+  const dialog = getEl("target-dialog");
+  const grid = getEl("target-dialog-grid");
+  if (!dialog || !grid) {
+    onPick(items[0]);
+    renderAll();
+    return;
+  }
+
   targetDialogActive = true;
-  document.getElementById("target-dialog-title").textContent = title;
-  document.getElementById("target-dialog-desc").textContent = desc;
+  setText("target-dialog-title", title);
+  setText("target-dialog-desc", desc);
 
   targetDialogPendingFallback = () => {
     onPick(items[0]);
     renderAll();
   };
 
-  const grid = document.getElementById("target-dialog-grid");
   grid.innerHTML = items.map((item, idx) => renderItemHtml(item, idx)).join("");
 
   grid.onclick = (e) => {
-    const btn = e.target.closest("[data-target-idx]");
+    const btn = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-target-idx]") : null;
     if (!btn) return;
     const idx = Number(btn.dataset.targetIdx);
     targetDialogPendingFallback = null;
-    dialog.close();
+    safeCloseModal(dialog);
     onPick(items[idx]);
     renderAll();
   };
 
-  const autoBtn = document.getElementById("btn-target-auto");
+  const autoBtn = getEl("btn-target-auto");
   if (autoBtn) {
     autoBtn.onclick = () => {
       targetDialogPendingFallback = null;
-      dialog.close();
+      safeCloseModal(dialog);
       onPick(items[0]);
       renderAll();
     };
   }
 
-  dialog.showModal();
+  safeShowModal(dialog);
 }
 
 function handleTargetDialogClose() {
@@ -140,6 +236,12 @@ const CARD_SELECTOR = ".card, .hand-card, .board-card, .land-card, .relic-card, 
 function prefersReducedMotion() {
   if (typeof state !== "undefined" && state.prefersReducedMotion !== undefined) {
     return Boolean(state.prefersReducedMotion);
+  }
+  if (typeof state !== "undefined" && state.motionPreference === "reduced") {
+    return true;
+  }
+  if (typeof state !== "undefined" && state.motionPreference === "full") {
+    return false;
   }
   return Boolean(
     typeof window !== "undefined" &&
@@ -208,6 +310,7 @@ function moveOrInsertBefore(parent, node, refNode) {
 }
 
 function patchInnerHtmlIfChanged(el, html) {
+  if (!el) return false;
   if (el._lastInnerHtml !== html) {
     el.innerHTML = html;
     el._lastInnerHtml = html;
@@ -979,38 +1082,36 @@ function seedPrevHandRect(uid, rect) {
   seededHandRects.set(uid, rect);
 }
 
-function renderAll() {
-  if (isHeadlessEnv()) return;
+// ============================================================================
+// RENDER SCHEDULER & INCREMENTAL SUB-RENDERERS
+// ============================================================================
 
-  const focusSelector = captureFocusedCardSelector();
+const ALL_RENDER_SECTIONS = Object.freeze([
+  "boss",
+  "math",
+  "stats",
+  "command",
+  "board",
+  "hand",
+  "window"
+]);
 
-  // Snapshot bounding rects of current hand cards before DOM reconciliation so played cards can FLIP to board/lands
-  const prevHandRects = new Map(seededHandRects);
-  seededHandRects.clear();
-  document.querySelectorAll("#player-hand [data-hand-uid]").forEach(el => {
-    if (!prevHandRects.has(el.dataset.handUid)) {
-      prevHandRects.set(el.dataset.handUid, el.getBoundingClientRect());
-    }
-  });
-  const libBtnEl = document.getElementById("btn-view-library");
-  const libRect = libBtnEl ? libBtnEl.getBoundingClientRect() : null;
+let pendingRenderSections = new Set();
+let scheduledRenderToken = null;
 
-  const boardUidSet = new Set([
-    ...state.playerCreatures.map(c => c.uid),
-    ...state.playerLands.map(l => l.uid)
-  ]);
+function renderBossPanel(enc, lifePct) {
+  setText("plane-badge", `PLANE ${enc.plane} • ${enc.tier}`);
+  setText("boss-name", enc.name);
+  setText("boss-rule", enc.rule);
 
-  const enc = getCurrentEncounter();
-  document.getElementById("plane-badge").textContent = `PLANE ${enc.plane} • ${enc.tier}`;
-  document.getElementById("boss-name").textContent = enc.name;
-  document.getElementById("boss-rule").textContent = enc.rule;
+  const enemyLifeBar = getEl("enemy-life-bar");
+  if (enemyLifeBar && enemyLifeBar.style) {
+    enemyLifeBar.style.width = `${lifePct}%`;
+  }
+  setText("enemy-life-text", `${state.enemyLife} / ${state.enemyMaxLife}`);
 
-  const lifePct = Math.max(0, Math.min(100, (state.enemyLife / state.enemyMaxLife) * 100));
-  document.getElementById("enemy-life-bar").style.width = `${lifePct}%`;
-  document.getElementById("enemy-life-text").textContent = `${state.enemyLife} / ${state.enemyMaxLife}`;
-
-  const ghostBarEl = document.getElementById("enemy-life-ghost");
-  if (ghostBarEl) {
+  const ghostBarEl = getEl("enemy-life-ghost");
+  if (ghostBarEl && ghostBarEl.style) {
     if (state.encounterIdx !== prevEnemyEncounterIdx || lifePct >= prevEnemyLifePct) {
       if (ghostBarTimer) {
         clearTimeout(ghostBarTimer);
@@ -1023,7 +1124,7 @@ function renderAll() {
     } else {
       if (ghostBarTimer) clearTimeout(ghostBarTimer);
       ghostBarTimer = setTimeout(() => {
-        ghostBarEl.style.width = `${lifePct}%`;
+        if (ghostBarEl.style) ghostBarEl.style.width = `${lifePct}%`;
         ghostBarTimer = null;
       }, prefersReducedMotion() ? 40 : 220);
     }
@@ -1031,25 +1132,32 @@ function renderAll() {
   prevEnemyEncounterIdx = state.encounterIdx;
   prevEnemyLifePct = lifePct;
 
-  const combat = calculateProjectedCombat();
-  document.getElementById("calc-power").textContent = combat.power;
-  document.getElementById("calc-mult").textContent = combat.mult;
-  document.getElementById("calc-total").textContent = `${combat.totalDamage} DMG`;
-  document.getElementById("mobile-boss-name").textContent = enc.name;
-  document.getElementById("mobile-boss-life").textContent = `${state.enemyLife} / ${state.enemyMaxLife}`;
-  document.getElementById("mobile-player-life").textContent = `${state.playerLife} / ${MAX_LIFE}`;
-  document.getElementById("mobile-turn-counter").textContent = `${state.turn} / ${state.maxTurns}`;
-  document.getElementById("mobile-projected-damage").textContent = `${combat.totalDamage} DMG`;
+  const encPos = state.encounterIdx % ENCOUNTERS.length;
+  const loop = Math.floor(state.encounterIdx / ENCOUNTERS.length);
+  const ladderHtml = ENCOUNTERS.map((e, i) =>
+    `<span class="ladder-node ${i < encPos ? "done" : ""} ${i === encPos ? "current" : ""}" title="${e.name}">${i < encPos ? "✓" : i + 1}</span>`
+  ).join('<span class="ladder-link"></span>') + (loop > 0 ? `<small class="ladder-loop">Loop ${loop + 1}</small>` : "");
+  patchInnerHtmlIfChanged(getEl("encounter-ladder"), ladderHtml);
+}
 
-  // Populate Power & Resonance hover breakdown tooltips & live breakdown drawer
+function renderCombatMathAndSynergies(enc, combat, lifePct) {
+  setText("calc-power", combat.power);
+  setText("calc-mult", combat.mult);
+  setText("calc-total", `${combat.totalDamage} DMG`);
+  setText("mobile-boss-name", enc.name);
+  setText("mobile-boss-life", `${state.enemyLife} / ${state.enemyMaxLife}`);
+  setText("mobile-player-life", `${state.playerLife} / ${MAX_LIFE}`);
+  setText("mobile-turn-counter", `${state.turn} / ${state.maxTurns}`);
+  setText("mobile-projected-damage", `${combat.totalDamage} DMG`);
+
   const powerTip = combat.powerBreakdown.map(b => `${b.label}: ${b.value}`).join("\n");
   const multTip = combat.resonanceBreakdown.map(b => `${b.label}: ${b.value}`).join("\n");
-  const powerPill = document.querySelector(".power-pill");
-  const multPill = document.querySelector(".mult-pill");
+  const powerPill = queryEl(".power-pill");
+  const multPill = queryEl(".mult-pill");
   if (powerPill) powerPill.title = `POWER BREAKDOWN (${combat.power}):\n${powerTip}`;
   if (multPill) multPill.title = `RESONANCE BREAKDOWN (×${combat.mult}):\n${multTip}`;
 
-  const breakdownEl = document.getElementById("math-breakdown-popover");
+  const breakdownEl = getEl("math-breakdown-popover");
   if (breakdownEl) {
     patchInnerHtmlIfChanged(breakdownEl, `
       <div class="breakdown-col">
@@ -1063,7 +1171,6 @@ function renderAll() {
     `);
   }
 
-  // --- Synergy panel + tier-up toasts ---
   const syns = getSynergyStates();
   const bonusTxt = x => [x.mult ? `+${x.mult} Mult` : "", x.power ? `+${x.power} Pwr` : ""].filter(Boolean).join(" ");
   const shown = syns.filter(x => x.count > 0);
@@ -1078,63 +1185,69 @@ function renderAll() {
         <span class="syn-bonus">${bonusTxt(x) || "—"}</span>
         <span class="syn-pips">${pips}</span></div>`;
     }).join("") : `<div class="zone-hint">Cast spells, play lands &amp; build your board to ignite synergies.</div>`);
-  patchInnerHtmlIfChanged(document.getElementById("synergy-box"), synergyHtml);
+  patchInnerHtmlIfChanged(getEl("synergy-box"), synergyHtml);
 
   syns.forEach(x => {
     if (x.tier > (state.synTiers[x.id] ?? -1)) spawnFx(`${x.icon} ${x.name} — Tier ${x.tier + 1}!`, "#ffbe3b");
     state.synTiers[x.id] = x.tier;
   });
 
-  // --- UI upgrades: ghost damage, retaliation forecast, lethal cues, run ladder ---
   const projPct = Math.min(lifePct, (combat.totalDamage / state.enemyMaxLife) * 100);
-  const projEl = document.getElementById("enemy-life-proj");
-  projEl.style.left = `${lifePct - projPct}%`;
-  projEl.style.width = `${projPct}%`;
+  const projEl = getEl("enemy-life-proj");
+  if (projEl && projEl.style) {
+    projEl.style.left = `${lifePct - projPct}%`;
+    projEl.style.width = `${projPct}%`;
+  }
 
   const survivors = state.enemyCreatures.filter(b => !combat.deadBlockerUids.has(b.uid) && !b.frozen);
   const threat = survivors.reduce((s, b) => s + b.power + (enc.staxHideBonus || 0), 0) + (enc.staxDrain || 0);
-  const threatEl = document.getElementById("calc-threat");
-  threatEl.textContent = `-${threat} HP`;
-  threatEl.classList.toggle("danger", threat >= state.playerLife);
-  document.getElementById("player-life").classList.toggle("danger", state.playerLife <= 8);
+  const threatEl = getEl("calc-threat");
+  const spawnN = enc.spawn.count || 1;
+  if (threatEl) {
+    threatEl.textContent = `-${threat} HP`;
+    if (threatEl.classList) threatEl.classList.toggle("danger", threat >= state.playerLife);
+    threatEl.title = `Next wave: ${spawnN}× ${enc.spawn.name} (${enc.spawn.power}/${enc.spawn.toughness + (enc.cenobiteAura || 0)})`;
+  }
+
+  const playerLifeEl = getEl("player-life");
+  if (playerLifeEl && playerLifeEl.classList) {
+    playerLifeEl.classList.toggle("danger", state.playerLife <= 8);
+  }
 
   const lethal = combat.totalDamage >= state.enemyLife && state.enemyLife > 0;
   const finalTurn = state.turn >= state.maxTurns;
-  const combatBtn = document.getElementById("btn-combat");
-  combatBtn.disabled = Boolean(state.runOver || state.combatLocked || state.enemyLife <= 0);
-  combatBtn.classList.toggle("lethal", lethal && !combatBtn.disabled);
-  combatBtn.textContent = state.runOver
-    ? "🔒 Run Ended — Choose New Deck"
-    : (lethal ? "💥 LETHAL — Finish the Boss!" : "⚔️ Resolve Attack & End Turn");
-  combatBtn.title = `Projected damage: ${combat.totalDamage}. Enemy retaliation: ${threat} Life. Shortcut: Space.`;
-  combatBtn.setAttribute(
-    "aria-label",
-    `${lethal ? "Lethal attack. " : ""}Resolve attack for ${combat.totalDamage} damage; expect ${threat} retaliation damage.`
-  );
+  const combatBtn = getEl("btn-combat");
+  if (combatBtn) {
+    combatBtn.disabled = Boolean(state.runOver || state.combatLocked || state.enemyLife <= 0);
+    if (combatBtn.classList) combatBtn.classList.toggle("lethal", lethal && !combatBtn.disabled);
+    combatBtn.textContent = state.runOver
+      ? "🔒 Run Ended — Choose New Deck"
+      : (lethal ? "💥 LETHAL — Finish the Boss!" : "⚔️ Resolve Attack & End Turn");
+    combatBtn.title = `Projected damage: ${combat.totalDamage}. Enemy retaliation: ${threat} Life. Shortcut: Space.`;
+    if (typeof combatBtn.setAttribute === "function") {
+      combatBtn.setAttribute(
+        "aria-label",
+        `${lethal ? "Lethal attack. " : ""}Resolve attack for ${combat.totalDamage} damage; expect ${threat} retaliation damage.`
+      );
+    }
+  }
 
-  const phase = document.getElementById("phase-indicator");
-  phase.textContent = state.runOver
-    ? "RUN ENDED"
-    : (finalTurn ? "FINAL TURN — LETHAL OR BUST" : "MAIN PHASE");
-  phase.classList.toggle("final", finalTurn || state.runOver);
+  const phase = getEl("phase-indicator");
+  if (phase) {
+    phase.textContent = state.runOver
+      ? "RUN ENDED"
+      : (finalTurn ? "FINAL TURN — LETHAL OR BUST" : "MAIN PHASE");
+    if (phase.classList) phase.classList.toggle("final", finalTurn || state.runOver);
+  }
+}
 
-  const spawnN = enc.spawn.count || 1;
-  threatEl.title = `Next wave: ${spawnN}× ${enc.spawn.name} (${enc.spawn.power}/${enc.spawn.toughness + (enc.cenobiteAura || 0)})`;
-  const encPos = state.encounterIdx % ENCOUNTERS.length;
-  const loop = Math.floor(state.encounterIdx / ENCOUNTERS.length);
-  const ladderHtml = ENCOUNTERS.map((e, i) =>
-    `<span class="ladder-node ${i < encPos ? "done" : ""} ${i === encPos ? "current" : ""}" title="${e.name}">${i < encPos ? "✓" : i + 1}</span>`
-  ).join('<span class="ladder-link"></span>') + (loop > 0 ? `<small class="ladder-loop">Loop ${loop + 1}</small>` : "");
-  patchInnerHtmlIfChanged(document.getElementById("encounter-ladder"), ladderHtml);
+function renderPlayerStatsAndMana() {
+  setText("player-life", `${state.playerLife} / ${MAX_LIFE}`);
+  setText("turn-counter", `${state.turn} / ${state.maxTurns}`);
+  setText("player-gold", `$${state.gold}`);
+  setText("land-drop-status", `Lands: ${state.landsPlayedThisTurn}/${state.maxLandsPerTurn}`);
 
-  document.getElementById("player-life").textContent = `${state.playerLife} / ${MAX_LIFE}`;
-  document.getElementById("turn-counter").textContent = `${state.turn} / ${state.maxTurns}`;
-  document.getElementById("player-gold").textContent = `$${state.gold}`;
-  document.getElementById("land-drop-status").textContent =
-    `Lands: ${state.landsPlayedThisTurn}/${state.maxLandsPerTurn}`;
-
-  // 1. Keyed Mana Pool Pips
-  const manaContainer = document.getElementById("mana-pool-display");
+  const manaContainer = getEl("mana-pool-display");
   const manaItems = buildManaPoolItems();
   reconcileKeyedList(
     manaContainer,
@@ -1166,18 +1279,20 @@ function renderAll() {
     }
   );
 
-  document.getElementById("library-count").textContent = state.library.length;
-  document.getElementById("graveyard-count").textContent = state.graveyard.length;
-  document.getElementById("archetype-badge").textContent =
-    `${state.deckArchetype.badge} (${state.masterDeck.length} Cards)`;
+  setText("library-count", state.library.length);
+  setText("graveyard-count", state.graveyard.length);
+  setText("archetype-badge", `${state.deckArchetype.badge} (${state.masterDeck.length} Cards)`);
 
-  const mullBtn = document.getElementById("btn-mulligan");
-  mullBtn.textContent = `Free Mulligan (${state.mulligansLeft})`;
-  mullBtn.disabled = state.mulligansLeft <= 0 || !state.canMulligan || state.runOver || state.combatLocked;
+  const mullBtn = getEl("btn-mulligan");
+  if (mullBtn) {
+    mullBtn.textContent = `Free Mulligan (${state.mulligansLeft})`;
+    mullBtn.disabled = state.mulligansLeft <= 0 || !state.canMulligan || state.runOver || state.combatLocked;
+  }
+}
 
-  // 2. Keyed Command Zone Relics
-  document.getElementById("relic-count").textContent = `(${state.relics.length}/5)`;
-  const relicContainer = document.getElementById("relic-slots");
+function renderCommandZone() {
+  setText("relic-count", `(${state.relics.length}/5)`);
+  const relicContainer = getEl("relic-slots");
   const relicSlotItems = [
     ...state.relics.map((r, idx) => ({ type: "relic", relic: r, idx, key: `relic_${r.id}` })),
     ...Array.from({ length: Math.max(0, 5 - state.relics.length) }, (_, i) => ({
@@ -1222,9 +1337,8 @@ function renderAll() {
     { animateMove: true }
   );
 
-  // 3. Keyed Consumable Arcane Scrolls
-  const consCountEl = document.getElementById("consumable-count");
-  const consSlotsEl = document.getElementById("consumable-slots");
+  const consCountEl = getEl("consumable-count");
+  const consSlotsEl = getEl("consumable-slots");
   if (consCountEl && consSlotsEl) {
     consCountEl.textContent = `(${state.consumables.length}/2)`;
     const consItems = [
@@ -1271,9 +1385,10 @@ function renderAll() {
       }
     );
   }
+}
 
-  // 4. Keyed Enemy Creatures with Block Assignments & Casualty Preview
-  const enemyRow = document.getElementById("enemy-creatures");
+function renderBattlefieldLanes(enc, combat, prevHandRects, libRect) {
+  const enemyRow = getEl("enemy-creatures");
   reconcileKeyedList(
     enemyRow,
     state.enemyCreatures,
@@ -1298,7 +1413,7 @@ function renderAll() {
         statusPillHtml = `<span class="status-pill status-blocker">🛡️ BLOCKS ${assign.attackerName}</span>`;
       }
 
-      const keepRetal = el.classList.contains("enemy-retaliating") ? " enemy-retaliating" : "";
+      const keepRetal = el.classList && el.classList.contains("enemy-retaliating") ? " enemy-retaliating" : "";
       const enemyFoilCls = ec.foil ? ` foil-card-${ec.foil}` : "";
       el.className = `board-card card-color-${ec.color}${enemyFoilCls}${willDie ? " will-die" : ""}${ec.frozen ? " frozen-card" : ""}${keepRetal}`;
       el.dataset.enemyUid = ec.uid;
@@ -1326,8 +1441,7 @@ function renderAll() {
     }
   );
 
-  // 5. Keyed Player Creatures with Casualty Preview & FLIP from Hand
-  const playerRow = document.getElementById("player-creatures");
+  const playerRow = getEl("player-creatures");
   reconcileKeyedList(
     playerRow,
     state.playerCreatures,
@@ -1414,8 +1528,7 @@ function renderAll() {
     }
   );
 
-  // 6. Keyed Player Lands with Slide/FLIP from Hand or Library
-  const landRow = document.getElementById("player-lands");
+  const landRow = getEl("player-lands");
   reconcileKeyedList(
     landRow,
     state.playerLands,
@@ -1452,9 +1565,32 @@ function renderAll() {
     }
   );
 
-  // 7. Keyed Player Hand with Spell Cast Exit & Library Draw Entry
-  document.getElementById("hand-count").textContent = state.hand.length;
-  const handRow = document.getElementById("player-hand");
+  if (!state.combatLocked) {
+    const attackerRects = new Map();
+    queryAll("#player-creatures [data-creature-uid]").forEach(el => {
+      const uid = el.dataset.creatureUid;
+      const pc = state.playerCreatures.find(c => c.uid === uid);
+      if (pc && pc.attacking && !pc.summoningSick && typeof el.getBoundingClientRect === "function") {
+        attackerRects.set(uid, el.getBoundingClientRect());
+      }
+    });
+    const blockerRects = new Map();
+    queryAll("#enemy-creatures [data-enemy-uid]").forEach(el => {
+      if (typeof el.getBoundingClientRect === "function") {
+        blockerRects.set(el.dataset.enemyUid, el.getBoundingClientRect());
+      }
+    });
+    lastPreCombatSnapshot = {
+      combat,
+      attackerRects,
+      blockerRects
+    };
+  }
+}
+
+function renderHandZone(prevHandRects, libRect, boardUidSet) {
+  setText("hand-count", state.hand.length);
+  const handRow = getEl("player-hand");
   const count = state.hand.length;
   const containerWidth = (handRow && handRow.clientWidth) ? handRow.clientWidth : 900;
   const cardWidth = 148;
@@ -1492,8 +1628,6 @@ function renderAll() {
       const layout = calculateFanLayout(idx, count, containerWidth, cardWidth);
       el.style.setProperty("--fan-rot", `${layout.rot}deg`);
       el.style.setProperty("--fan-y", `${layout.y}px`);
-      // Resting horizontal placement is already handled by flexbox margin-left: calc(-1 * var(--hand-overlap));
-      // Setting --fan-x to 0px prevents double horizontal displacement.
       el.style.setProperty("--fan-x", "0px");
 
       patchInnerHtmlIfChanged(el, `
@@ -1524,7 +1658,6 @@ function renderAll() {
         }
       },
       onExit(oldEl, key, rect) {
-        // If the card moved to the battlefield or land row, its destination node plays the FLIP animation
         if (boardUidSet.has(key)) {
           oldEl.remove();
         } else {
@@ -1535,113 +1668,194 @@ function renderAll() {
     }
   );
   hasInitialHandRendered = true;
+}
 
-  // Capture pre-combat board snapshot whenever we're in the interactive main phase so combat resolution has exact rects/assignments
+function renderDesktopAndWindowStatus() {
   if (!state.combatLocked) {
-    const attackerRects = new Map();
-    document.querySelectorAll("#player-creatures [data-creature-uid]").forEach(el => {
-      const uid = el.dataset.creatureUid;
-      const pc = state.playerCreatures.find(c => c.uid === uid);
-      if (pc && pc.attacking && !pc.summoningSick) {
-        attackerRects.set(uid, el.getBoundingClientRect());
+    saveRunState(Boolean(isShopDialogOpen() || state.enemyLife <= 0));
+  }
+  if (typeof DesktopBridge !== "undefined") {
+    DesktopBridge.updateWindowTitle(state);
+    setText("desktop-mode-badge", DesktopBridge.isDesktopApp() ? "APP" : "WEB");
+  }
+}
+
+function renderIncremental(sections = ALL_RENDER_SECTIONS) {
+  if (isHeadlessEnv() || !getEl("plane-badge")) return;
+
+  const sectionSet = new Set(Array.isArray(sections) && sections.length ? sections : ALL_RENDER_SECTIONS);
+  const focusSelector = captureFocusedCardSelector();
+
+  const prevHandRects = new Map(seededHandRects);
+  if (sectionSet.has("board") || sectionSet.has("hand")) {
+    seededHandRects.clear();
+    queryAll("#player-hand [data-hand-uid]").forEach(el => {
+      if (!prevHandRects.has(el.dataset.handUid) && typeof el.getBoundingClientRect === "function") {
+        prevHandRects.set(el.dataset.handUid, el.getBoundingClientRect());
       }
     });
-    const blockerRects = new Map();
-    document.querySelectorAll("#enemy-creatures [data-enemy-uid]").forEach(el => {
-      blockerRects.set(el.dataset.enemyUid, el.getBoundingClientRect());
-    });
-    lastPreCombatSnapshot = {
-      combat,
-      attackerRects,
-      blockerRects
-    };
+  }
+  const libBtnEl = getEl("btn-view-library");
+  const libRect = (libBtnEl && typeof libBtnEl.getBoundingClientRect === "function")
+    ? libBtnEl.getBoundingClientRect()
+    : null;
+
+  const boardUidSet = new Set([
+    ...state.playerCreatures.map(c => c.uid),
+    ...state.playerLands.map(l => l.uid)
+  ]);
+
+  const enc = getCurrentEncounter();
+  const lifePct = Math.max(0, Math.min(100, (state.enemyLife / state.enemyMaxLife) * 100));
+  const needsCombat = sectionSet.has("math") || sectionSet.has("board");
+  const combat = needsCombat ? calculateProjectedCombat() : null;
+
+  if (sectionSet.has("boss")) {
+    renderBossPanel(enc, lifePct);
+  }
+  if (sectionSet.has("math") && combat) {
+    renderCombatMathAndSynergies(enc, combat, lifePct);
+  }
+  if (sectionSet.has("stats")) {
+    renderPlayerStatsAndMana();
+  }
+  if (sectionSet.has("command")) {
+    renderCommandZone();
+  }
+  if (sectionSet.has("board") && combat) {
+    renderBattlefieldLanes(enc, combat, prevHandRects, libRect);
+  }
+  if (sectionSet.has("hand")) {
+    renderHandZone(prevHandRects, libRect, boardUidSet);
   }
 
   flushTriggerNotifications();
 
   if (focusSelector) {
-    const restored = document.querySelector(focusSelector);
+    const restored = queryEl(focusSelector);
     if (restored && typeof restored.focus === "function") {
       restored.focus();
     }
   }
-  const shopDialog = document.getElementById("shop-dialog");
-  if (!state.combatLocked) {
-    saveRunState(Boolean((shopDialog && shopDialog.open) || state.enemyLife <= 0));
+
+  if (sectionSet.has("window")) {
+    renderDesktopAndWindowStatus();
   }
+}
+
+function flushScheduledRender() {
+  if (scheduledRenderToken != null) {
+    if (typeof cancelAnimationFrame === "function" && typeof scheduledRenderToken === "number") {
+      try { cancelAnimationFrame(scheduledRenderToken); } catch (_) {}
+    }
+    scheduledRenderToken = null;
+  }
+  if (pendingRenderSections.size === 0) return false;
+  const sections = Array.from(pendingRenderSections);
+  pendingRenderSections.clear();
+  renderIncremental(sections);
+  return true;
+}
+
+function scheduleRender(sections = ALL_RENDER_SECTIONS) {
+  const list = Array.isArray(sections) && sections.length ? sections : ALL_RENDER_SECTIONS;
+  for (const s of list) pendingRenderSections.add(s);
+  if (scheduledRenderToken != null) return;
+  if (typeof requestAnimationFrame === "function") {
+    scheduledRenderToken = requestAnimationFrame(() => {
+      scheduledRenderToken = null;
+      flushScheduledRender();
+    });
+  } else {
+    scheduledRenderToken = Promise.resolve().then(() => {
+      scheduledRenderToken = null;
+      flushScheduledRender();
+    });
+  }
+}
+
+function renderAll() {
+  pendingRenderSections.clear();
+  renderIncremental(ALL_RENDER_SECTIONS);
 }
 
 function renderShop() {
   if (isHeadlessEnv()) return;
 
-  document.getElementById("shop-gold").textContent = `$${state.gold}`;
-  const rerollBtn = document.getElementById("btn-reroll-shop");
+  setText("shop-gold", `$${state.gold}`);
+  const rerollBtn = getEl("btn-reroll-shop");
   if (rerollBtn) {
     rerollBtn.disabled = state.gold < 2;
   }
 
-  const relicBox = document.getElementById("shop-relics");
-  relicBox.innerHTML = state.shopStock.relics.map((r, i) => `
-    <div class="shop-item-card">
-      <div class="shop-item-top">
-        <span class="shop-item-name">✨ ${r.name}</span>
-        <button type="button" class="btn-buy" data-buy-relic="${i}"
-          ${r.bought || state.gold < r.cost || state.relics.length >= 5 ? "disabled" : ""}>
-          ${r.bought ? "OWNED" : `$${r.cost}`}
-        </button>
-      </div>
-      <div class="relic-desc">${r.desc}</div>
-    </div>
-  `).join("");
-
-  const cardsBox = document.getElementById("shop-cards");
-  cardsBox.innerHTML = state.shopStock.cards.map((item, i) => {
-    const c = item.card;
-    return `
+  const relicBox = getEl("shop-relics");
+  if (relicBox) {
+    relicBox.innerHTML = state.shopStock.relics.map((r, i) => `
       <div class="shop-item-card">
         <div class="shop-item-top">
-          <span class="shop-item-name">${c.name} ${renderManaCostHtml(c)}</span>
-          <button type="button" class="btn-buy" data-buy-card="${i}"
-            ${item.bought || state.gold < item.cost ? "disabled" : ""}>
-            ${item.bought ? "DRAFTED" : `$${item.cost}`}
+          <span class="shop-item-name">✨ ${r.name}</span>
+          <button type="button" class="btn-buy" data-buy-relic="${i}"
+            ${r.bought || state.gold < r.cost || state.relics.length >= 5 ? "disabled" : ""}>
+            ${r.bought ? "OWNED" : `$${r.cost}`}
           </button>
         </div>
-        <div class="relic-desc">${c.rules}</div>
+        <div class="relic-desc">${r.desc}</div>
       </div>
-    `;
-  }).join("");
+    `).join("");
+  }
 
-  const upgBox = document.getElementById("shop-upgrades");
-  const thinCheck = canSafelyThinBasics();
-  upgBox.innerHTML = state.shopStock.upgrades.map((u, i) => {
-    const scrollFull = u.isConsumable && state.consumables.length >= 2;
-    const healFull = u.id === "sanctum_heal" && state.playerLife >= MAX_LIFE;
-    const thinBlocked = u.id === "exile_thin" && !thinCheck.allowed;
-    const disabled = u.bought || state.gold < u.cost || scrollFull || healFull || thinBlocked;
-
-    let btnText = `$${u.cost}`;
-    if (u.bought) btnText = "APPLIED";
-    else if (scrollFull) btnText = "FULL";
-    else if (healFull) btnText = "MAX HP";
-    else if (thinBlocked) btnText = "GUARDED";
-
-    const descText = u.id === "exile_thin"
-      ? `${u.desc} (${thinCheck.reason})`
-      : u.desc;
-
-    return `
-      <div class="shop-item-card">
-        <div class="shop-item-top">
-          <span class="shop-item-name">${u.isConsumable ? "📜" : (u.id === "sanctum_heal" ? "💚" : "🔨")} ${u.name}</span>
-          <button type="button" class="btn-buy" data-buy-upg="${i}"
-            ${disabled ? "disabled" : ""}>
-            ${btnText}
-          </button>
+  const cardsBox = getEl("shop-cards");
+  if (cardsBox) {
+    cardsBox.innerHTML = state.shopStock.cards.map((item, i) => {
+      const c = item.card;
+      return `
+        <div class="shop-item-card">
+          <div class="shop-item-top">
+            <span class="shop-item-name">${c.name} ${renderManaCostHtml(c)}</span>
+            <button type="button" class="btn-buy" data-buy-card="${i}"
+              ${item.bought || state.gold < item.cost ? "disabled" : ""}>
+              ${item.bought ? "DRAFTED" : `$${item.cost}`}
+            </button>
+          </div>
+          <div class="relic-desc">${c.rules}</div>
         </div>
-        <div class="relic-desc">${descText}</div>
-      </div>
-    `;
-  }).join("");
+      `;
+    }).join("");
+  }
+
+  const upgBox = getEl("shop-upgrades");
+  if (upgBox) {
+    const thinCheck = canSafelyThinBasics();
+    upgBox.innerHTML = state.shopStock.upgrades.map((u, i) => {
+      const scrollFull = u.isConsumable && state.consumables.length >= 2;
+      const healFull = u.id === "sanctum_heal" && state.playerLife >= MAX_LIFE;
+      const thinBlocked = u.id === "exile_thin" && !thinCheck.allowed;
+      const disabled = u.bought || state.gold < u.cost || scrollFull || healFull || thinBlocked;
+
+      let btnText = `$${u.cost}`;
+      if (u.bought) btnText = "APPLIED";
+      else if (scrollFull) btnText = "FULL";
+      else if (healFull) btnText = "MAX HP";
+      else if (thinBlocked) btnText = "GUARDED";
+
+      const descText = u.id === "exile_thin"
+        ? `${u.desc} (${thinCheck.reason})`
+        : u.desc;
+
+      return `
+        <div class="shop-item-card">
+          <div class="shop-item-top">
+            <span class="shop-item-name">${u.isConsumable ? "📜" : (u.id === "sanctum_heal" ? "💚" : "🔨")} ${u.name}</span>
+            <button type="button" class="btn-buy" data-buy-upg="${i}"
+              ${disabled ? "disabled" : ""}>
+              ${btnText}
+            </button>
+          </div>
+          <div class="relic-desc">${descText}</div>
+        </div>
+      `;
+    }).join("");
+  }
 }
 
 const logHistory = [];
@@ -1649,7 +1863,7 @@ function setLog(msg) {
   if (isHeadlessEnv()) return;
   logHistory.push(msg);
   if (logHistory.length > 10) logHistory.shift();
-  const strip = document.getElementById("combat-log-strip");
+  const strip = getEl("combat-log-strip");
   if (strip) {
     strip.textContent = msg;
     strip.title = logHistory.join("\n");
@@ -1659,8 +1873,8 @@ function setLog(msg) {
   if (typeof msg === "string" && msg.startsWith("⚠️ Enemy Retaliation:")) {
     const enc = typeof getCurrentEncounter === "function" ? getCurrentEncounter() : null;
     const bonusPow = enc && enc.staxHideBonus ? enc.staxHideBonus : 0;
-    const lifeChip = document.querySelector(".life-chip");
-    const activeCards = Array.from(document.querySelectorAll("#enemy-creatures .board-card:not(.frozen-card)"));
+    const lifeChip = queryEl(".life-chip");
+    const activeCards = queryAll("#enemy-creatures .board-card:not(.frozen-card)");
     activeCards.forEach((cardEl, idx) => {
       const uid = cardEl.dataset.enemyUid;
       const ec = state.enemyCreatures.find(b => b.uid === uid);
@@ -1692,7 +1906,7 @@ function setLog(msg) {
 
 function spawnFx(text, borderColor = "#ffbe3b") {
   if (isHeadlessEnv()) return;
-  const layer = ensureFxLayerTop() || document.getElementById("fx-layer");
+  const layer = ensureFxLayerTop() || getEl("fx-layer");
   if (!layer) return;
 
   if (typeof text === "string") {
@@ -1718,89 +1932,118 @@ function spawnFx(text, borderColor = "#ffbe3b") {
 
 function openDeckInspector(title, desc, cards) {
   if (isHeadlessEnv()) return;
-  document.getElementById("deck-dialog-title").textContent = title;
-  document.getElementById("deck-dialog-desc").textContent = desc;
-  const grid = document.getElementById("deck-dialog-grid");
-  if (cards.length === 0) {
-    grid.innerHTML = `<div class="zone-hint">Zone is currently empty.</div>`;
-  } else {
-    grid.innerHTML = cards.map(c => {
-      const isCreature = c.type === "Creature";
-      const dispPow = isCreature ? c.power + (c.permPowerBonus || 0) : 0;
-      const dispTough = isCreature ? c.toughness + (c.permToughnessBonus || 0) : 0;
-      const foilCls = c.foil ? ` foil-card-${c.foil}` : "";
-      return `
-        <div class="hand-card card-color-${c.color}${foilCls}" style="cursor:default">
-          ${c.foil ? `<div class="foil-badge">✨ ${c.foil}</div>` : ""}
-          <div>
-            <div class="card-top-bar">
-              <span class="card-title">${c.name}</span>
-              ${renderManaCostHtml(c)}
+  setText("deck-dialog-title", title);
+  setText("deck-dialog-desc", desc);
+  const grid = getEl("deck-dialog-grid");
+  if (grid) {
+    if (!Array.isArray(cards) || cards.length === 0) {
+      grid.innerHTML = `<div class="zone-hint">Zone is currently empty.</div>`;
+    } else {
+      grid.innerHTML = cards.map(c => {
+        const isCreature = c.type === "Creature";
+        const dispPow = isCreature ? c.power + (c.permPowerBonus || 0) : 0;
+        const dispTough = isCreature ? c.toughness + (c.permToughnessBonus || 0) : 0;
+        const foilCls = c.foil ? ` foil-card-${c.foil}` : "";
+        return `
+          <div class="hand-card card-color-${c.color}${foilCls}" style="cursor:default">
+            ${c.foil ? `<div class="foil-badge">✨ ${c.foil}</div>` : ""}
+            <div>
+              <div class="card-top-bar">
+                <span class="card-title">${c.name}</span>
+                ${renderManaCostHtml(c)}
+              </div>
+              <div class="card-type-line">${c.type}</div>
             </div>
-            <div class="card-type-line">${c.type}</div>
+            <div class="card-rules">${c.rules}</div>
+            <div class="card-bottom-bar">
+              <span></span>
+              ${isCreature ? `<span class="pt-box">${dispPow}/${dispTough}</span>` : ""}
+            </div>
           </div>
-          <div class="card-rules">${c.rules}</div>
-          <div class="card-bottom-bar">
-            <span></span>
-            ${isCreature ? `<span class="pt-box">${dispPow}/${dispTough}</span>` : ""}
-          </div>
-        </div>
-      `;
-    }).join("");
+        `;
+      }).join("");
+    }
   }
-  document.getElementById("deck-dialog").showModal();
+  safeShowModal("deck-dialog");
 }
 
 function openNewRunModal(forceChoice = false, customTitle = null, customDesc = null) {
   if (isHeadlessEnv()) return;
-  const dialog = document.getElementById("newrun-dialog");
+  const dialog = getEl("newrun-dialog");
+  if (!dialog) return;
   newRunForceChoice = Boolean(forceChoice);
-  dialog.setAttribute("closedby", newRunForceChoice ? "none" : "any");
+  if (typeof dialog.setAttribute === "function") {
+    dialog.setAttribute("closedby", newRunForceChoice ? "none" : "any");
+  }
 
-  const closeForm = document.getElementById("newrun-close-form");
+  const closeForm = getEl("newrun-close-form");
   if (closeForm) {
     closeForm.hidden = newRunForceChoice;
   }
 
-  document.getElementById("newrun-title").textContent =
-    customTitle || "Choose Your Planeswalker Deck (40 Cards)";
-  const descEl = document.getElementById("newrun-desc");
-  if (descEl) {
-    descEl.textContent =
-      customDesc || "Each 40-card deck mixes 17 Lands (including Fetch Lands) and 23 Spells, plus 1 starting Command Zone Relic.";
-  }
+  setText("newrun-title", customTitle || "Choose Your Planeswalker Deck (40 Cards)");
+  setText(
+    "newrun-desc",
+    customDesc || "Each 40-card deck mixes 17 Lands (including Fetch Lands) and 23 Spells, plus 1 starting Command Zone Relic."
+  );
 
-  const grid = document.getElementById("starter-decks-grid");
-  grid.innerHTML = STARTER_DECKS.map((d, idx) => `
-    <button type="button" class="starter-deck-box" data-starter-idx="${idx}">
-      <span class="plane-badge">${d.badge}</span>
-      <h3>${d.name}</h3>
-      <p class="relic-desc">${d.desc}</p>
-      <div class="zone-hint">Starting Relic: <strong>${RELIC_DB.find(r => r.id === d.startingRelic).name}</strong></div>
-      <span class="btn-combat" style="margin-top:auto">Play This 40-Card Deck</span>
-    </button>
-  `).join("");
-  if (!dialog.open) {
-    dialog.showModal();
+  const grid = getEl("starter-decks-grid");
+  if (grid) {
+    grid.innerHTML = STARTER_DECKS.map((d, idx) => `
+      <button type="button" class="starter-deck-box" data-starter-idx="${idx}">
+        <span class="plane-badge">${d.badge}</span>
+        <h3>${d.name}</h3>
+        <p class="relic-desc">${d.desc}</p>
+        <div class="zone-hint">Starting Relic: <strong>${RELIC_DB.find(r => r.id === d.startingRelic).name}</strong></div>
+        <span class="btn-combat" style="margin-top:auto">Play This 40-Card Deck</span>
+      </button>
+    `).join("");
   }
+  safeShowModal(dialog);
 }
 
 function openVictoryModal(enc, earned, healed) {
   if (isHeadlessEnv()) return;
-  const dialog = document.getElementById("victory-dialog");
+  const dialog = getEl("victory-dialog");
   if (!dialog) {
-    document.getElementById("shop-dialog").showModal();
+    safeShowModal("shop-dialog");
     return;
   }
-  document.getElementById("victory-summary").textContent =
-    `You shattered ${enc.name} and conquered Plane 2 with ${state.deckArchetype.name}! (+$${earned} Gold${healed > 0 ? `, +${healed} Life` : ""})`;
-  document.getElementById("victory-stats").innerHTML = `
-    <div class="stat-chip"><span class="stat-label">ARCHETYPE</span><strong>${state.deckArchetype.badge}</strong></div>
-    <div class="stat-chip"><span class="stat-label">RELICS HELD</span><strong>${state.relics.length} / 5</strong></div>
-    <div class="stat-chip"><span class="stat-label">DECK SIZE</span><strong>${state.masterDeck.length} Cards</strong></div>
-    <div class="stat-chip"><span class="stat-label">LIFE REMAINING</span><strong>${state.playerLife} / ${MAX_LIFE}</strong></div>
-  `;
-  dialog.showModal();
+  setText(
+    "victory-summary",
+    `You shattered ${enc.name} and conquered Plane 2 with ${state.deckArchetype.name}! (+$${earned} Gold${healed > 0 ? `, +${healed} Life` : ""})`
+  );
+  const statsEl = getEl("victory-stats");
+  if (statsEl) {
+    statsEl.innerHTML = `
+      <div class="stat-chip"><span class="stat-label">ARCHETYPE</span><strong>${state.deckArchetype.badge}</strong></div>
+      <div class="stat-chip"><span class="stat-label">RELICS HELD</span><strong>${state.relics.length} / 5</strong></div>
+      <div class="stat-chip"><span class="stat-label">DECK SIZE</span><strong>${state.masterDeck.length} Cards</strong></div>
+      <div class="stat-chip"><span class="stat-label">LIFE REMAINING</span><strong>${state.playerLife} / ${MAX_LIFE}</strong></div>
+    `;
+  }
+  safeShowModal(dialog);
+}
+
+function presentVictoryOrShopModal(enc, earned, healed, badgeText, summaryText) {
+  if (isHeadlessEnv()) return;
+  setText("shop-plane-badge", badgeText);
+  setText("victory-reward-summary", summaryText);
+  renderShop();
+  renderAll();
+  if (state.encounterIdx === ENCOUNTERS.length - 1) {
+    openVictoryModal(enc, earned, healed);
+  } else {
+    safeShowModal("shop-dialog");
+  }
+}
+
+function openRestoredShopModal(enc) {
+  if (isHeadlessEnv()) return;
+  setText("shop-plane-badge", `CLEARED PLANE ${enc.plane} • ${enc.tier}`);
+  setText("victory-reward-summary", `Restored Sanctum Shop after defeating ${enc.name}.`);
+  renderShop();
+  safeShowModal("shop-dialog");
 }
 
 let activeTiltedCard = null;
@@ -1955,32 +2198,38 @@ function cancelHandDrag(reason = "cancel") {
 }
 
 function createHandDragController(config = {}) {
-  let dragLifecycleState = "idle"; // "idle" | "armed" | "dragging" | "dropping" | "snapping"
-  let pointerId = null;
-  let pointerType = "mouse";
-  let cardEl = null;
-  let card = null;
-  let startX = 0;
-  let startY = 0;
-  let currentX = 0;
-  let currentY = 0;
-  let springX = { pos: 0, vel: 0 };
-  let springY = { pos: 0, vel: 0 };
-  let leanSpring = { pos: 0, vel: 0 };
-  let wobbleTime = 0;
-  let isWobbling = false;
-  let rafId = null;
-  let lastTime = 0;
-  let suppressClick = false;
-  let touchFocusedEl = null;
-
   const DRAG_THRESHOLD = 6; // px
+
+  // Centralized drag state object (single source of truth for pointer drag lifecycle)
+  const dragState = {
+    phase: "idle", // "idle" | "armed" | "dragging" | "dropping" | "snapping"
+    pointerId: null,
+    pointerType: "mouse",
+    hasPointerCapture: false,
+    cardEl: null,
+    card: null,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0,
+    springX: { pos: 0, vel: 0 },
+    springY: { pos: 0, vel: 0 },
+    leanSpring: { pos: 0, vel: 0 },
+    wobbleTime: 0,
+    isWobbling: false,
+    rafId: null,
+    lastTime: 0,
+    suppressClick: false,
+    suppressClickReason: null,
+    touchFocusedEl: null,
+    lastResetReason: "init"
+  };
 
   function getActiveDropZoneEl(c) {
     if (typeof document === "undefined" || !c) return null;
-    if (c.type === "Land") return document.getElementById("player-lands");
-    if (c.type === "Creature") return document.getElementById("player-creatures");
-    return document.querySelector(".battlefield-table");
+    if (c.type === "Land") return getEl("player-lands");
+    if (c.type === "Creature") return getEl("player-creatures");
+    return queryEl(".battlefield-table");
   }
 
   function setZoneActive(c, active) {
@@ -2001,153 +2250,199 @@ function createHandDragController(config = {}) {
   }
 
   function stopLoop() {
-    if (rafId) {
+    if (dragState.rafId != null) {
       if (typeof cancelAnimationFrame === "function") {
-        cancelAnimationFrame(rafId);
+        cancelAnimationFrame(dragState.rafId);
       }
-      rafId = null;
+      dragState.rafId = null;
     }
   }
 
-  function cancel(reason = "cancel") {
-    if (dragLifecycleState === "idle") return false;
-    stopLoop();
-    setZoneActive(card, false);
-
-    if (cardEl && pointerId != null && typeof cardEl.releasePointerCapture === "function") {
-      try { cardEl.releasePointerCapture(pointerId); } catch (_) {}
-    }
-
-    if (dragLifecycleState === "armed" || prefersReducedMotion() || reason === "numberKey" || reason === "escape" || reason === "pointercancel" || reason === "combatLocked" || reason === "runOver" || typeof requestAnimationFrame !== "function") {
-      resetVisuals(cardEl);
-      cardEl = null;
-      card = null;
-      pointerId = null;
-      dragLifecycleState = "idle";
+  function acquirePointerCapture(el, pid) {
+    if (!el || pid == null || typeof el.setPointerCapture !== "function") return false;
+    try {
+      el.setPointerCapture(pid);
+      dragState.hasPointerCapture = true;
       return true;
+    } catch (_) {
+      dragState.hasPointerCapture = false;
+      return false;
+    }
+  }
+
+  function releaseActivePointerCapture() {
+    const el = dragState.cardEl;
+    const pid = dragState.pointerId;
+    dragState.hasPointerCapture = false;
+    if (!el || pid == null || typeof el.releasePointerCapture !== "function") return;
+    try {
+      if (typeof el.hasPointerCapture === "function" && !el.hasPointerCapture(pid)) return;
+      el.releasePointerCapture(pid);
+    } catch (_) {}
+  }
+
+  function markClickSuppressed(reason = "drag") {
+    dragState.suppressClick = true;
+    dragState.suppressClickReason = reason;
+  }
+
+  function consumeClickSuppression() {
+    const suppressed = Boolean(dragState.suppressClick);
+    dragState.suppressClick = false;
+    dragState.suppressClickReason = null;
+    return suppressed;
+  }
+
+  // Unified cleanup routine replacing repeated manual resets
+  function resetDragState(reason = "reset") {
+    stopLoop();
+    setZoneActive(dragState.card, false);
+    releaseActivePointerCapture();
+    resetVisuals(dragState.cardEl);
+    dragState.cardEl = null;
+    dragState.card = null;
+    dragState.pointerId = null;
+    dragState.hasPointerCapture = false;
+    dragState.springX = { pos: 0, vel: 0 };
+    dragState.springY = { pos: 0, vel: 0 };
+    dragState.leanSpring = { pos: 0, vel: 0 };
+    dragState.wobbleTime = 0;
+    dragState.isWobbling = false;
+    dragState.phase = "idle";
+    dragState.lastResetReason = reason;
+    return true;
+  }
+
+  function cancel(reason = "cancel") {
+    if (dragState.phase === "idle") return false;
+    stopLoop();
+    setZoneActive(dragState.card, false);
+    releaseActivePointerCapture();
+
+    const immediateReasons = new Set([
+      "numberKey",
+      "escape",
+      "pointercancel",
+      "lostpointercapture",
+      "combatLocked",
+      "runOver",
+      "override",
+      "tap",
+      "destroy"
+    ]);
+
+    if (
+      dragState.phase === "armed" ||
+      prefersReducedMotion() ||
+      immediateReasons.has(reason) ||
+      typeof requestAnimationFrame !== "function"
+    ) {
+      return resetDragState(reason);
     }
 
-    // Snap back with spring
-    dragLifecycleState = "snapping";
+    dragState.phase = "snapping";
     startSnapLoop();
     return true;
   }
 
   function startSnapLoop() {
     stopLoop();
-    if (typeof performance !== "undefined" && performance.now) {
-      lastTime = performance.now();
-    } else {
-      lastTime = Date.now();
-    }
+    dragState.lastTime = (typeof performance !== "undefined" && performance.now)
+      ? performance.now()
+      : Date.now();
 
     function snapStep(now) {
-      const dt = Math.min(((now || Date.now()) - lastTime) / 1000, 0.064);
-      lastTime = now || Date.now();
+      const dt = Math.min(((now || Date.now()) - dragState.lastTime) / 1000, 0.064);
+      dragState.lastTime = now || Date.now();
 
-      springX = stepSpring(springX, 0, dt, { stiffness: 260, damping: 22 });
-      springY = stepSpring(springY, 0, dt, { stiffness: 260, damping: 22 });
+      dragState.springX = stepSpring(dragState.springX, 0, dt, { stiffness: 260, damping: 22 });
+      dragState.springY = stepSpring(dragState.springY, 0, dt, { stiffness: 260, damping: 22 });
 
       let lean = 0;
-      if (isWobbling) {
-        wobbleTime += dt;
-        const amp = Math.max(0, 14 * Math.exp(-wobbleTime * 6));
-        lean = Math.sin(wobbleTime * 28) * amp;
-        if (amp < 0.2) isWobbling = false;
+      if (dragState.isWobbling) {
+        dragState.wobbleTime += dt;
+        const amp = Math.max(0, 14 * Math.exp(-dragState.wobbleTime * 6));
+        lean = Math.sin(dragState.wobbleTime * 28) * amp;
+        if (amp < 0.2) dragState.isWobbling = false;
       } else {
-        leanSpring = stepSpring(leanSpring, 0, dt, { stiffness: 260, damping: 22 });
-        lean = Math.max(-15, Math.min(15, leanSpring.pos));
+        dragState.leanSpring = stepSpring(dragState.leanSpring, 0, dt, { stiffness: 260, damping: 22 });
+        lean = Math.max(-15, Math.min(15, dragState.leanSpring.pos));
       }
 
-      if (cardEl?.style) {
-        cardEl.style.setProperty("--drag-x", `${springX.pos.toFixed(1)}px`);
-        cardEl.style.setProperty("--drag-y", `${springY.pos.toFixed(1)}px`);
-        cardEl.style.setProperty("--lean", `${lean.toFixed(2)}deg`);
+      if (dragState.cardEl?.style) {
+        dragState.cardEl.style.setProperty("--drag-x", `${dragState.springX.pos.toFixed(1)}px`);
+        dragState.cardEl.style.setProperty("--drag-y", `${dragState.springY.pos.toFixed(1)}px`);
+        dragState.cardEl.style.setProperty("--lean", `${lean.toFixed(2)}deg`);
       }
 
-      const dist = Math.hypot(springX.pos, springY.pos);
-      const speed = Math.hypot(springX.vel, springY.vel);
+      const dist = Math.hypot(dragState.springX.pos, dragState.springY.pos);
+      const speed = Math.hypot(dragState.springX.vel, dragState.springY.vel);
 
-      if (dist < 0.5 && speed < 1.0 && !isWobbling) {
-        resetVisuals(cardEl);
-        cardEl = null;
-        card = null;
-        pointerId = null;
-        dragLifecycleState = "idle";
+      if ((dist < 0.5 && speed < 1.0 && !dragState.isWobbling) || typeof requestAnimationFrame !== "function") {
+        resetDragState("snapComplete");
         return;
       }
 
-      if (typeof requestAnimationFrame === "function") {
-        rafId = requestAnimationFrame(snapStep);
-      } else {
-        resetVisuals(cardEl);
-        cardEl = null;
-        card = null;
-        pointerId = null;
-        dragLifecycleState = "idle";
-      }
+      dragState.rafId = requestAnimationFrame(snapStep);
     }
 
     if (typeof requestAnimationFrame === "function") {
-      rafId = requestAnimationFrame(snapStep);
+      dragState.rafId = requestAnimationFrame(snapStep);
     } else {
-      resetVisuals(cardEl);
-      cardEl = null;
-      card = null;
-      pointerId = null;
-      dragLifecycleState = "idle";
+      resetDragState("snapFallback");
     }
   }
 
   function startDragLoop() {
     stopLoop();
-    if (typeof performance !== "undefined" && performance.now) {
-      lastTime = performance.now();
-    } else {
-      lastTime = Date.now();
-    }
+    dragState.lastTime = (typeof performance !== "undefined" && performance.now)
+      ? performance.now()
+      : Date.now();
 
     function dragStep(now) {
-      if (dragLifecycleState !== "dragging") return;
-      const dt = Math.min(((now || Date.now()) - lastTime) / 1000, 0.064);
-      lastTime = now || Date.now();
+      if (dragState.phase !== "dragging") return;
+      const dt = Math.min(((now || Date.now()) - dragState.lastTime) / 1000, 0.064);
+      dragState.lastTime = now || Date.now();
 
-      const targetDx = currentX - startX;
-      const targetDy = currentY - startY;
+      const targetDx = dragState.currentX - dragState.startX;
+      const targetDy = dragState.currentY - dragState.startY;
 
       if (prefersReducedMotion()) {
-        springX = { pos: targetDx, vel: 0 };
-        springY = { pos: targetDy, vel: 0 };
-        leanSpring = { pos: 0, vel: 0 };
+        dragState.springX = { pos: targetDx, vel: 0 };
+        dragState.springY = { pos: targetDy, vel: 0 };
+        dragState.leanSpring = { pos: 0, vel: 0 };
       } else {
-        springX = stepSpring(springX, targetDx, dt, { stiffness: 320, damping: 2 * Math.sqrt(320) });
-        springY = stepSpring(springY, targetDy, dt, { stiffness: 320, damping: 2 * Math.sqrt(320) });
-        const targetLean = Math.max(-15, Math.min(15, springX.vel * 0.025));
-        leanSpring = stepSpring(leanSpring, targetLean, dt, { stiffness: 280, damping: 24 });
+        dragState.springX = stepSpring(dragState.springX, targetDx, dt, { stiffness: 320, damping: 2 * Math.sqrt(320) });
+        dragState.springY = stepSpring(dragState.springY, targetDy, dt, { stiffness: 320, damping: 2 * Math.sqrt(320) });
+        const targetLean = Math.max(-15, Math.min(15, dragState.springX.vel * 0.025));
+        dragState.leanSpring = stepSpring(dragState.leanSpring, targetLean, dt, { stiffness: 280, damping: 24 });
       }
 
-      if (cardEl?.style) {
-        const clampedLean = Math.max(-15, Math.min(15, leanSpring.pos));
-        cardEl.style.setProperty("--drag-x", `${springX.pos.toFixed(1)}px`);
-        cardEl.style.setProperty("--drag-y", `${springY.pos.toFixed(1)}px`);
-        cardEl.style.setProperty("--lean", `${clampedLean.toFixed(2)}deg`);
-        cardEl.style.setProperty("--lift", "-16px");
+      if (dragState.cardEl?.style) {
+        const clampedLean = Math.max(-15, Math.min(15, dragState.leanSpring.pos));
+        dragState.cardEl.style.setProperty("--drag-x", `${dragState.springX.pos.toFixed(1)}px`);
+        dragState.cardEl.style.setProperty("--drag-y", `${dragState.springY.pos.toFixed(1)}px`);
+        dragState.cardEl.style.setProperty("--lean", `${clampedLean.toFixed(2)}deg`);
+        dragState.cardEl.style.setProperty("--lift", "-16px");
       }
 
       if (typeof requestAnimationFrame === "function") {
-        rafId = requestAnimationFrame(dragStep);
+        dragState.rafId = requestAnimationFrame(dragStep);
       }
     }
 
     if (typeof requestAnimationFrame === "function") {
-      rafId = requestAnimationFrame(dragStep);
+      dragState.rafId = requestAnimationFrame(dragStep);
     }
   }
 
   function onPointerDown(e) {
+    if (!e) return;
+    // Start a drag only for the primary pointer button (event.button === 0)
+    if (e.button != null && e.button !== 0) return;
     if (typeof state !== "undefined" && (state.runOver || state.combatLocked)) return;
-    if (dragLifecycleState !== "idle" && dragLifecycleState !== "snapping") return;
-    if (dragLifecycleState === "snapping") cancel("override");
+    if (dragState.phase !== "idle" && dragState.phase !== "snapping") return;
+    if (dragState.phase === "snapping") resetDragState("override");
 
     const targetCardEl = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-hand-uid]") : null;
     if (!targetCardEl) return;
@@ -2155,170 +2450,170 @@ function createHandDragController(config = {}) {
     const c = (typeof state !== "undefined" && state.hand) ? state.hand.find(item => item.uid === uid) : null;
     if (!c) return;
 
-    dragLifecycleState = "armed";
-    cardEl = targetCardEl;
-    card = c;
-    pointerId = e.pointerId;
-    pointerType = e.pointerType || "mouse";
-    startX = e.clientX;
-    startY = e.clientY;
-    currentX = e.clientX;
-    currentY = e.clientY;
-    springX = { pos: 0, vel: 0 };
-    springY = { pos: 0, vel: 0 };
-    leanSpring = { pos: 0, vel: 0 };
-    isWobbling = false;
+    dragState.phase = "armed";
+    dragState.cardEl = targetCardEl;
+    dragState.card = c;
+    dragState.pointerId = e.pointerId;
+    dragState.pointerType = e.pointerType || "mouse";
+    dragState.startX = e.clientX;
+    dragState.startY = e.clientY;
+    dragState.currentX = e.clientX;
+    dragState.currentY = e.clientY;
+    dragState.springX = { pos: 0, vel: 0 };
+    dragState.springY = { pos: 0, vel: 0 };
+    dragState.leanSpring = { pos: 0, vel: 0 };
+    dragState.isWobbling = false;
+    dragState.wobbleTime = 0;
 
-    if (typeof cardEl.setPointerCapture === "function" && pointerId != null) {
-      try { cardEl.setPointerCapture(pointerId); } catch (_) {}
-    }
+    acquirePointerCapture(dragState.cardEl, dragState.pointerId);
   }
 
   function onPointerMove(e) {
+    if (!e) return;
     if (typeof state !== "undefined" && (state.runOver || state.combatLocked)) {
       cancel("combatLocked");
       return;
     }
-    if (pointerId != null && e.pointerId !== pointerId) return;
+    if (dragState.pointerId != null && e.pointerId !== dragState.pointerId) return;
 
-    if (dragLifecycleState === "armed") {
-      const dist = Math.hypot(e.clientX - startX, e.clientY - startY);
+    if (dragState.phase === "armed") {
+      const dist = Math.hypot(e.clientX - dragState.startX, e.clientY - dragState.startY);
       if (dist > DRAG_THRESHOLD) {
-        dragLifecycleState = "dragging";
-        if (touchFocusedEl) {
-          touchFocusedEl.classList.remove("touch-focused");
-          touchFocusedEl = null;
+        dragState.phase = "dragging";
+        markClickSuppressed("dragThreshold");
+        if (dragState.touchFocusedEl) {
+          if (dragState.touchFocusedEl.classList) dragState.touchFocusedEl.classList.remove("touch-focused");
+          dragState.touchFocusedEl = null;
         }
-        if (cardEl.classList) cardEl.classList.add("is-dragging");
-        resetCardTilt(cardEl);
+        if (dragState.cardEl?.classList) dragState.cardEl.classList.add("is-dragging");
+        resetCardTilt(dragState.cardEl);
 
-        const playable = canPlayCard(card);
-        if (!playable) {
-          if (cardEl.classList) cardEl.classList.add("drag-invalid");
-          const reason = card.type === "Land" ? "Land Limit" : "Missing Mana Pips";
-          cardEl.style.setProperty("--drag-reason", `"${reason}"`);
+        const playable = canPlayCard(dragState.card);
+        if (!playable && dragState.cardEl) {
+          if (dragState.cardEl.classList) dragState.cardEl.classList.add("drag-invalid");
+          const reason = dragState.card.type === "Land" ? "Land Limit" : "Missing Mana Pips";
+          if (dragState.cardEl.style) dragState.cardEl.style.setProperty("--drag-reason", `"${reason}"`);
         }
 
-        setZoneActive(card, true);
+        setZoneActive(dragState.card, true);
         startDragLoop();
       }
     }
 
-    if (dragLifecycleState === "dragging") {
-      currentX = e.clientX;
-      currentY = e.clientY;
-      if (prefersReducedMotion() && cardEl?.style) {
-        cardEl.style.setProperty("--drag-x", `${(currentX - startX).toFixed(1)}px`);
-        cardEl.style.setProperty("--drag-y", `${(currentY - startY).toFixed(1)}px`);
-        cardEl.style.setProperty("--lean", "0deg");
-        cardEl.style.setProperty("--lift", "-16px");
+    if (dragState.phase === "dragging") {
+      dragState.currentX = e.clientX;
+      dragState.currentY = e.clientY;
+      if (prefersReducedMotion() && dragState.cardEl?.style) {
+        dragState.cardEl.style.setProperty("--drag-x", `${(dragState.currentX - dragState.startX).toFixed(1)}px`);
+        dragState.cardEl.style.setProperty("--drag-y", `${(dragState.currentY - dragState.startY).toFixed(1)}px`);
+        dragState.cardEl.style.setProperty("--lean", "0deg");
+        dragState.cardEl.style.setProperty("--lift", "-16px");
       }
     }
   }
 
   function onPointerUp(e) {
-    if (pointerId != null && e.pointerId !== pointerId) return;
+    if (!e) return;
+    if (dragState.pointerId != null && e.pointerId !== dragState.pointerId) return;
 
-    if (dragLifecycleState === "armed") {
-      const tappedEl = cardEl;
-      const tappedCard = card;
-      const wasTouch = pointerType === "touch";
-      cancel("tap");
+    if (dragState.phase === "armed") {
+      const tappedEl = dragState.cardEl;
+      const tappedCard = dragState.card;
+      const wasTouch = dragState.pointerType === "touch";
+      resetDragState("tap");
 
-      if (wasTouch && tappedEl) {
-        if (touchFocusedEl === tappedEl) {
-          touchFocusedEl.classList.remove("touch-focused");
-          touchFocusedEl = null;
-          suppressClick = true;
+      if (wasTouch && tappedEl && tappedCard) {
+        if (dragState.touchFocusedEl === tappedEl) {
+          if (dragState.touchFocusedEl.classList) dragState.touchFocusedEl.classList.remove("touch-focused");
+          dragState.touchFocusedEl = null;
+          markClickSuppressed("touchPlay");
           playCardFromHand(tappedCard.uid);
         } else {
-          if (touchFocusedEl) touchFocusedEl.classList.remove("touch-focused");
-          touchFocusedEl = tappedEl;
-          touchFocusedEl.classList.add("touch-focused");
-          suppressClick = true;
+          if (dragState.touchFocusedEl && dragState.touchFocusedEl.classList) {
+            dragState.touchFocusedEl.classList.remove("touch-focused");
+          }
+          dragState.touchFocusedEl = tappedEl;
+          if (dragState.touchFocusedEl.classList) dragState.touchFocusedEl.classList.add("touch-focused");
+          markClickSuppressed("touchFocus");
         }
       }
       return;
     }
 
-    if (dragLifecycleState === "dragging") {
-      suppressClick = true;
+    if (dragState.phase === "dragging") {
+      markClickSuppressed("dragRelease");
       stopLoop();
-      setZoneActive(card, false);
+      setZoneActive(dragState.card, false);
+      releaseActivePointerCapture();
 
-      if (cardEl && pointerId != null && typeof cardEl.releasePointerCapture === "function") {
-        try { cardEl.releasePointerCapture(pointerId); } catch (_) {}
-      }
-
-      const zone = getDropZoneForCard(card, e.clientX, e.clientY);
-      const playable = canPlayCard(card);
+      const activeCard = dragState.card;
+      const activeEl = dragState.cardEl;
+      const zone = getDropZoneForCard(activeCard, e.clientX, e.clientY);
+      const playable = canPlayCard(activeCard);
 
       if (zone && playable) {
-        dragLifecycleState = "dropping";
-        if (typeof cardEl.getBoundingClientRect === "function") {
-          seedPrevHandRect(card.uid, cardEl.getBoundingClientRect());
+        dragState.phase = "dropping";
+        if (activeEl && typeof activeEl.getBoundingClientRect === "function") {
+          seedPrevHandRect(activeCard.uid, activeEl.getBoundingClientRect());
         }
-        const playedUid = card.uid;
-        resetVisuals(cardEl);
-        cardEl = null;
-        card = null;
-        pointerId = null;
-        dragLifecycleState = "idle";
+        const playedUid = activeCard.uid;
+        resetDragState("dropSuccess");
         playCardFromHand(playedUid);
         return;
       }
 
       if (zone && !playable) {
-        if (card.type === "Land") {
+        if (activeCard.type === "Land") {
           spawnFx(`Land Limit (${state.maxLandsPerTurn}/turn)!`, "#ff6b6b");
         } else {
-          spawnFx(`Missing Mana Pips for ${card.manaCost}!`, "#ff6b6b");
+          spawnFx(`Missing Mana Pips for ${activeCard.manaCost}!`, "#ff6b6b");
         }
         if (prefersReducedMotion() || typeof requestAnimationFrame !== "function") {
-          resetVisuals(cardEl);
-          cardEl = null;
-          card = null;
-          pointerId = null;
-          dragLifecycleState = "idle";
+          resetDragState("invalidDropReducedMotion");
           return;
         }
-        isWobbling = true;
-        wobbleTime = 0;
-        dragLifecycleState = "snapping";
+        dragState.isWobbling = true;
+        dragState.wobbleTime = 0;
+        dragState.phase = "snapping";
         startSnapLoop();
         return;
       }
 
-      // Dropped outside play zone: silent snap-back
+      // Dropped outside play zone: silent snap-back or immediate reset
       if (prefersReducedMotion() || typeof requestAnimationFrame !== "function") {
-        resetVisuals(cardEl);
-        cardEl = null;
-        card = null;
-        pointerId = null;
-        dragLifecycleState = "idle";
+        resetDragState("outsideDropReducedMotion");
         return;
       }
-      dragLifecycleState = "snapping";
+      dragState.phase = "snapping";
       startSnapLoop();
     }
   }
 
   function onPointerCancel(e) {
-    if (pointerId != null && e && e.pointerId !== pointerId) return;
+    if (dragState.pointerId != null && e && e.pointerId != null && e.pointerId !== dragState.pointerId) return;
     cancel("pointercancel");
   }
 
+  function onLostPointerCapture(e) {
+    if (dragState.pointerId != null && e && e.pointerId != null && e.pointerId !== dragState.pointerId) return;
+    dragState.hasPointerCapture = false;
+    if (dragState.phase === "armed" || dragState.phase === "dragging") {
+      resetDragState("lostpointercapture");
+    }
+  }
+
   function clearTouchFocus() {
-    if (touchFocusedEl) {
-      if (touchFocusedEl.classList) touchFocusedEl.classList.remove("touch-focused");
-      touchFocusedEl = null;
+    if (dragState.touchFocusedEl) {
+      if (dragState.touchFocusedEl.classList) dragState.touchFocusedEl.classList.remove("touch-focused");
+      dragState.touchFocusedEl = null;
     }
   }
 
   const instance = {
-    getState: () => dragLifecycleState,
-    getActiveUid: () => card?.uid || null,
-    getDraggedCardUid: () => card?.uid || null,
+    getState: () => dragState.phase,
+    getDragState: () => ({ ...dragState }),
+    getActiveUid: () => dragState.card?.uid || null,
+    getDraggedCardUid: () => dragState.card?.uid || null,
     handlePointerDown: onPointerDown,
     onPointerDown,
     handlePointerMove: onPointerMove,
@@ -2327,15 +2622,15 @@ function createHandDragController(config = {}) {
     onPointerUp,
     handlePointerCancel: onPointerCancel,
     onPointerCancel,
+    handleLostPointerCapture: onLostPointerCapture,
+    onLostPointerCapture,
+    resetDragState,
     cancel,
     clearTouchFocus,
-    consumeClickSuppression: () => {
-      const s = suppressClick;
-      suppressClick = false;
-      return s;
-    },
+    markClickSuppressed,
+    consumeClickSuppression,
     destroy: () => {
-      cancel("destroy");
+      resetDragState("destroy");
       clearTouchFocus();
       if (activeHandDragController === instance) {
         activeHandDragController = null;
@@ -2353,6 +2648,84 @@ if (typeof globalThis !== "undefined") {
   globalThis.getDropZoneForCard = getDropZoneForCard;
   globalThis.cancelHandDrag = cancelHandDrag;
   globalThis.seedPrevHandRect = seedPrevHandRect;
+  globalThis.scheduleRender = scheduleRender;
+  globalThis.flushScheduledRender = flushScheduledRender;
+  globalThis.renderIncremental = renderIncremental;
+}
+
+function showSettingsStatusMessage(message, isError = false) {
+  const msgEl = getEl("settings-status-msg");
+  if (!msgEl) return;
+  msgEl.hidden = false;
+  msgEl.textContent = message;
+  if (msgEl.classList) msgEl.classList.toggle("error", Boolean(isError));
+}
+
+function renderDesktopSettingsModal() {
+  if (isHeadlessEnv() || typeof DesktopBridge === "undefined") return;
+  const info = DesktopBridge.getRuntimeInfo();
+  const settings = DesktopBridge.getSettings();
+  const summary = DesktopBridge.getActiveSaveSummary();
+
+  const runtimeBadge = getEl("settings-runtime-badge");
+  if (runtimeBadge) {
+    if (info.runtime === "tauri") {
+      runtimeBadge.textContent = "DESKTOP APP • TAURI V2 NATIVE ENGINE";
+    } else if (info.runtime === "macos-native") {
+      runtimeBadge.textContent = "DESKTOP APP • MACOS NATIVE WKWEBVIEW ENGINE";
+    } else {
+      runtimeBadge.textContent = "WEB MODE • LOCALSTORAGE SANCTUM ENGINE";
+    }
+  }
+
+  const fsBtn = getEl("btn-toggle-fullscreen");
+  if (fsBtn) {
+    fsBtn.textContent = settings.fullscreen ? "🖥️ Exit Fullscreen (F11)" : "🖥️ Enter Fullscreen (F11)";
+  }
+
+  const scaleGroup = getEl("settings-scale-group");
+  if (scaleGroup) {
+    queryAll("[data-ui-scale]", scaleGroup).forEach(btn => {
+      if (btn.classList) btn.classList.toggle("active", Number(btn.dataset.uiScale) === settings.uiScale);
+    });
+  }
+
+  const motionGroup = getEl("settings-motion-group");
+  if (motionGroup) {
+    queryAll("[data-motion-mode]", motionGroup).forEach(btn => {
+      if (btn.classList) btn.classList.toggle("active", btn.dataset.motionMode === settings.motionMode);
+    });
+  }
+
+  const saveSummaryEl = getEl("settings-save-summary");
+  if (saveSummaryEl) {
+    const storageLabel = info.isDesktop
+      ? "Synced to Native Application Support & LocalStorage"
+      : "Saved in Browser LocalStorage";
+    if (summary) {
+      saveSummaryEl.innerHTML =
+        `<strong>${summary.archetype}</strong> • Encounter ${summary.encounter}${summary.inShop ? " (Sanctum Shop)" : ""} • ` +
+        `<strong>${summary.playerLife} HP</strong> • <strong>$${summary.gold}</strong> • ${summary.deckSize} Cards<br>` +
+        `<small>${storageLabel}</small>`;
+    } else {
+      saveSummaryEl.innerHTML = `No active run saved yet.<br><small>${storageLabel}</small>`;
+    }
+  }
+
+  const quitBtn = getEl("btn-quit-desktop");
+  if (quitBtn) {
+    quitBtn.hidden = !info.isDesktop;
+  }
+}
+
+function openDesktopSettingsModal() {
+  if (isHeadlessEnv()) return;
+  const dlg = getEl("settings-dialog");
+  if (!dlg) return;
+  const msgEl = getEl("settings-status-msg");
+  if (msgEl) msgEl.hidden = true;
+  renderDesktopSettingsModal();
+  safeShowModal(dlg);
 }
 
 function initEvents() {
@@ -2363,9 +2736,10 @@ function initEvents() {
   if (!activeHandDragController) {
     activeHandDragController = createHandDragController();
   }
-  const handEl = document.getElementById("player-hand");
+  const handEl = getEl("player-hand");
   if (handEl) {
     handEl.addEventListener("pointerdown", activeHandDragController.handlePointerDown);
+    handEl.addEventListener("lostpointercapture", activeHandDragController.handleLostPointerCapture);
     if (typeof window !== "undefined") {
       window.addEventListener("pointermove", activeHandDragController.handlePointerMove);
       window.addEventListener("pointerup", activeHandDragController.handlePointerUp);
@@ -2375,6 +2749,16 @@ function initEvents() {
       handEl.addEventListener("pointerup", activeHandDragController.handlePointerUp);
       handEl.addEventListener("pointercancel", activeHandDragController.handlePointerCancel);
     }
+
+    handEl.addEventListener("click", (e) => {
+      if (activeHandDragController && activeHandDragController.consumeClickSuppression()) {
+        e.stopPropagation();
+        e.preventDefault();
+        return;
+      }
+      const cardEl = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-hand-uid]") : null;
+      if (cardEl) playCardFromHand(cardEl.dataset.handUid);
+    });
   }
 
   document.addEventListener("pointerdown", (e) => {
@@ -2383,51 +2767,73 @@ function initEvents() {
     }
   }, { passive: true });
 
-  document.getElementById("player-hand").addEventListener("click", (e) => {
-    if (activeHandDragController && activeHandDragController.consumeClickSuppression()) {
-      e.stopPropagation();
-      e.preventDefault();
-      return;
-    }
-    const cardEl = e.target.closest("[data-hand-uid]");
-    if (cardEl) playCardFromHand(cardEl.dataset.handUid);
-  });
+  const playerCreaturesEl = getEl("player-creatures");
+  if (playerCreaturesEl) {
+    playerCreaturesEl.addEventListener("click", (e) => {
+      const crEl = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-creature-uid]") : null;
+      if (crEl) toggleCreatureAttack(crEl.dataset.creatureUid);
+    });
+  }
 
-  document.getElementById("player-creatures").addEventListener("click", (e) => {
-    const crEl = e.target.closest("[data-creature-uid]");
-    if (crEl) toggleCreatureAttack(crEl.dataset.creatureUid);
-  });
+  const playerLandsEl = getEl("player-lands");
+  if (playerLandsEl) {
+    playerLandsEl.addEventListener("click", (e) => {
+      const landEl = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-land-uid]") : null;
+      if (landEl) tapLandManually(landEl.dataset.landUid);
+    });
+  }
 
-  document.getElementById("player-lands").addEventListener("click", (e) => {
-    const landEl = e.target.closest("[data-land-uid]");
-    if (landEl) tapLandManually(landEl.dataset.landUid);
-  });
+  const mullBtn = getEl("btn-mulligan");
+  if (mullBtn) {
+    mullBtn.addEventListener("click", () => {
+      cancelHandDrag("mulligan");
+      useMulligan();
+    });
+  }
 
-  document.getElementById("btn-mulligan").addEventListener("click", () => {
-    cancelHandDrag("mulligan");
-    useMulligan();
-  });
+  const relicSlotsEl = getEl("relic-slots");
+  if (relicSlotsEl) {
+    relicSlotsEl.addEventListener("click", (e) => {
+      if (!e.target || typeof e.target.closest !== "function") return;
+      const moveBtn = e.target.closest("[data-move-relic]");
+      if (moveBtn) {
+        moveRelic(Number(moveBtn.dataset.moveRelic), Number(moveBtn.dataset.moveDir));
+        return;
+      }
+      const b = e.target.closest("[data-sell-relic]");
+      if (b) sellRelic(b.dataset.sellRelic);
+    });
+  }
 
-  document.getElementById("relic-slots").addEventListener("click", (e) => {
-    const moveBtn = e.target.closest("[data-move-relic]");
-    if (moveBtn) {
-      moveRelic(Number(moveBtn.dataset.moveRelic), Number(moveBtn.dataset.moveDir));
-      return;
-    }
-    const b = e.target.closest("[data-sell-relic]");
-    if (b) sellRelic(b.dataset.sellRelic);
-  });
-
-  const consSlots = document.getElementById("consumable-slots");
+  const consSlots = getEl("consumable-slots");
   if (consSlots) {
     consSlots.addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-consumable-uid]");
+      const btn = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-consumable-uid]") : null;
       if (btn) useConsumable(btn.dataset.consumableUid);
     });
   }
 
+  document.addEventListener("contextmenu", (e) => {
+    if (typeof DesktopBridge !== "undefined" && DesktopBridge.isDesktopApp()) {
+      const tag = e.target && e.target.tagName ? e.target.tagName.toLowerCase() : "";
+      if (tag !== "input" && tag !== "textarea") {
+        e.preventDefault();
+      }
+    }
+  });
+
   document.addEventListener("keydown", (e) => {
-    if (document.querySelector("dialog[open]") || state.runOver || state.combatLocked || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!e.repeat && e.key === "F11" && typeof DesktopBridge !== "undefined") {
+      e.preventDefault();
+      DesktopBridge.toggleFullscreen().then(() => renderDesktopSettingsModal());
+      return;
+    }
+    const activeTag = document.activeElement && document.activeElement.tagName
+      ? document.activeElement.tagName.toLowerCase()
+      : "";
+    if (activeTag === "input" || activeTag === "textarea") return;
+
+    if (queryEl("dialog[open]") || state.runOver || state.combatLocked || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "Escape") {
       cancelHandDrag("escape");
     } else if (e.key >= "1" && e.key <= "9") {
@@ -2444,66 +2850,100 @@ function initEvents() {
     } else if (e.key === "m" || e.key === "M") {
       cancelHandDrag("mulligan");
       useMulligan();
+    } else if (e.key === "l" || e.key === "L") {
+      cancelHandDrag("inspector");
+      openDeckInspector(
+        `Remaining Library (${state.library.length} Cards)`,
+        "Cards currently remaining in your deck (shown in shuffled order). Fetch Lands and Cultivate let you search specific Basic Land colors out of here!",
+        state.library
+      );
+    } else if (e.key === "g" || e.key === "G") {
+      cancelHandDrag("inspector");
+      openDeckInspector(
+        `Graveyard (${state.graveyard.length} Cards)`,
+        "Resolved Spells, cracked Fetch Lands, and fallen Creatures.",
+        state.graveyard
+      );
+    } else if (e.key === ",") {
+      cancelHandDrag("settings");
+      openDesktopSettingsModal();
     }
   });
 
-  document.getElementById("btn-combat").addEventListener("click", () => {
-    cancelHandDrag("combat");
-    executeCombatAndEndTurn();
-  });
+  const combatBtn = getEl("btn-combat");
+  if (combatBtn) {
+    combatBtn.addEventListener("click", () => {
+      cancelHandDrag("combat");
+      executeCombatAndEndTurn();
+    });
+  }
 
-  document.getElementById("btn-view-library").addEventListener("click", () => {
-    openDeckInspector(
-      `Remaining Library (${state.library.length} Cards)`,
-      "Cards currently remaining in your deck (shown in shuffled order). Fetch Lands and Cultivate let you search specific Basic Land colors out of here!",
-      state.library
-    );
-  });
+  const viewLibBtn = getEl("btn-view-library");
+  if (viewLibBtn) {
+    viewLibBtn.addEventListener("click", () => {
+      openDeckInspector(
+        `Remaining Library (${state.library.length} Cards)`,
+        "Cards currently remaining in your deck (shown in shuffled order). Fetch Lands and Cultivate let you search specific Basic Land colors out of here!",
+        state.library
+      );
+    });
+  }
 
-  document.getElementById("btn-view-graveyard").addEventListener("click", () => {
-    openDeckInspector(
-      `Graveyard (${state.graveyard.length} Cards)`,
-      "Resolved Spells, cracked Fetch Lands, and fallen Creatures.",
-      state.graveyard
-    );
-  });
+  const viewGraveBtn = getEl("btn-view-graveyard");
+  if (viewGraveBtn) {
+    viewGraveBtn.addEventListener("click", () => {
+      openDeckInspector(
+        `Graveyard (${state.graveyard.length} Cards)`,
+        "Resolved Spells, cracked Fetch Lands, and fallen Creatures.",
+        state.graveyard
+      );
+    });
+  }
 
-  document.getElementById("btn-new-run").addEventListener("click", () => {
-    openNewRunModal(Boolean(state.runOver));
-  });
+  const newRunBtn = getEl("btn-new-run");
+  if (newRunBtn) {
+    newRunBtn.addEventListener("click", () => {
+      openNewRunModal(Boolean(state.runOver));
+    });
+  }
 
-  const newrunDialog = document.getElementById("newrun-dialog");
-  newrunDialog.addEventListener("cancel", (e) => {
-    if (newRunForceChoice || newrunDialog.getAttribute("closedby") === "none") {
-      e.preventDefault();
-    }
-  });
+  const newrunDialog = getEl("newrun-dialog");
+  if (newrunDialog) {
+    newrunDialog.addEventListener("cancel", (e) => {
+      if (newRunForceChoice || (typeof newrunDialog.getAttribute === "function" && newrunDialog.getAttribute("closedby") === "none")) {
+        e.preventDefault();
+      }
+    });
+  }
 
-  document.getElementById("starter-decks-grid").addEventListener("click", (e) => {
-    const box = e.target.closest("[data-starter-idx]");
-    if (box) {
-      const idx = Number(box.dataset.starterIdx);
-      newRunForceChoice = false;
-      newrunDialog.close();
-      clearRunState();
-      startNewRun(STARTER_DECKS[idx]);
-    }
-  });
+  const starterGrid = getEl("starter-decks-grid");
+  if (starterGrid) {
+    starterGrid.addEventListener("click", (e) => {
+      const box = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-starter-idx]") : null;
+      if (box) {
+        const idx = Number(box.dataset.starterIdx);
+        newRunForceChoice = false;
+        safeCloseModal(newrunDialog);
+        clearRunState();
+        startNewRun(STARTER_DECKS[idx]);
+      }
+    });
+  }
 
-  const victoryDialog = document.getElementById("victory-dialog");
+  const victoryDialog = getEl("victory-dialog");
   if (victoryDialog) {
     victoryDialog.addEventListener("cancel", (e) => e.preventDefault());
-    const endlessBtn = document.getElementById("btn-endless-continue");
+    const endlessBtn = getEl("btn-endless-continue");
     if (endlessBtn) {
       endlessBtn.addEventListener("click", () => {
-        victoryDialog.close();
-        document.getElementById("shop-dialog").showModal();
+        safeCloseModal(victoryDialog);
+        safeShowModal("shop-dialog");
       });
     }
-    const victoryNewRunBtn = document.getElementById("btn-victory-newrun");
+    const victoryNewRunBtn = getEl("btn-victory-newrun");
     if (victoryNewRunBtn) {
       victoryNewRunBtn.addEventListener("click", () => {
-        victoryDialog.close();
+        safeCloseModal(victoryDialog);
         state.runOver = true;
         clearRunState();
         openNewRunModal(true, "🏆 Planeswalker Ascendant — Start a New Run");
@@ -2511,70 +2951,228 @@ function initEvents() {
     }
   }
 
-  const shopDialog = document.getElementById("shop-dialog");
-  shopDialog.addEventListener("cancel", (e) => {
-    e.preventDefault();
-  });
-
-  shopDialog.addEventListener("click", (e) => {
-    const relicBtn = e.target.closest("[data-buy-relic]");
-    if (relicBtn) buyRelic(Number(relicBtn.dataset.buyRelic));
-
-    const cardBtn = e.target.closest("[data-buy-card]");
-    if (cardBtn) buyDraftCard(Number(cardBtn.dataset.buyCard));
-
-    const upgBtn = e.target.closest("[data-buy-upg]");
-    if (upgBtn) buyUpgrade(Number(upgBtn.dataset.buyUpg));
-  });
-
-  const colorDialog = document.getElementById("color-dialog");
-  colorDialog.addEventListener("cancel", (e) => {
-    if (!colorDialogAllowCancel) {
+  const shopDialog = getEl("shop-dialog");
+  if (shopDialog) {
+    shopDialog.addEventListener("cancel", (e) => {
       e.preventDefault();
-    }
-  });
-  colorDialog.addEventListener("close", () => {
-    if (colorDialogPendingFallback) {
-      const fn = colorDialogPendingFallback;
-      colorDialogPendingFallback = null;
-      fn();
-    }
-  });
+    });
 
-  const targetDialog = document.getElementById("target-dialog");
+    shopDialog.addEventListener("click", (e) => {
+      if (!e.target || typeof e.target.closest !== "function") return;
+      const relicBtn = e.target.closest("[data-buy-relic]");
+      if (relicBtn) buyRelic(Number(relicBtn.dataset.buyRelic));
+
+      const cardBtn = e.target.closest("[data-buy-card]");
+      if (cardBtn) buyDraftCard(Number(cardBtn.dataset.buyCard));
+
+      const upgBtn = e.target.closest("[data-buy-upg]");
+      if (upgBtn) buyUpgrade(Number(upgBtn.dataset.buyUpg));
+    });
+  }
+
+  const colorDialog = getEl("color-dialog");
+  if (colorDialog) {
+    colorDialog.addEventListener("cancel", (e) => {
+      if (!colorDialogAllowCancel) {
+        e.preventDefault();
+      }
+    });
+    colorDialog.addEventListener("close", () => {
+      if (colorDialogPendingFallback) {
+        const fn = colorDialogPendingFallback;
+        colorDialogPendingFallback = null;
+        fn();
+      }
+    });
+  }
+
+  const targetDialog = getEl("target-dialog");
   if (targetDialog) {
     targetDialog.addEventListener("close", handleTargetDialogClose);
   }
 
-  document.getElementById("btn-reroll-shop").addEventListener("click", () => {
-    if (state.gold < 2) return;
-    state.gold -= 2;
-    generateShopStock(true);
-    saveRunState(true);
-    renderShop();
-    renderAll();
-  });
+  const rerollBtn = getEl("btn-reroll-shop");
+  if (rerollBtn) {
+    rerollBtn.addEventListener("click", () => {
+      if (state.gold < 2) return;
+      state.gold -= 2;
+      generateShopStock(true);
+      saveRunState(true);
+      renderShop();
+      renderAll();
+    });
+  }
 
-  document.getElementById("btn-next-encounter").addEventListener("click", () => {
-    shopDialog.close();
-    state.encounterIdx++;
-    beginEncounter();
-    saveRunState(false);
-  });
+  const nextEncBtn = getEl("btn-next-encounter");
+  if (nextEncBtn) {
+    nextEncBtn.addEventListener("click", () => {
+      safeCloseModal(shopDialog);
+      state.encounterIdx++;
+      beginEncounter();
+      saveRunState(false);
+    });
+  }
 
-  if (!("closedBy" in HTMLDialogElement.prototype)) {
+  const desktopSettingsBtn = getEl("btn-desktop-settings");
+  if (desktopSettingsBtn) {
+    desktopSettingsBtn.addEventListener("click", () => {
+      cancelHandDrag("settings");
+      openDesktopSettingsModal();
+    });
+  }
+
+  const settingsDialog = getEl("settings-dialog");
+  if (settingsDialog && typeof DesktopBridge !== "undefined") {
+    const fsBtn = getEl("btn-toggle-fullscreen");
+    if (fsBtn) {
+      fsBtn.addEventListener("click", async () => {
+        await DesktopBridge.toggleFullscreen();
+        renderDesktopSettingsModal();
+      });
+    }
+
+    const scaleGroup = getEl("settings-scale-group");
+    if (scaleGroup) {
+      scaleGroup.addEventListener("click", async (e) => {
+        const btn = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-ui-scale]") : null;
+        if (!btn) return;
+        await DesktopBridge.updateSettings({ uiScale: Number(btn.dataset.uiScale) });
+        renderDesktopSettingsModal();
+      });
+    }
+
+    const motionGroup = getEl("settings-motion-group");
+    if (motionGroup) {
+      motionGroup.addEventListener("click", async (e) => {
+        const btn = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-motion-mode]") : null;
+        if (!btn) return;
+        await DesktopBridge.updateSettings({ motionMode: btn.dataset.motionMode });
+        renderDesktopSettingsModal();
+      });
+    }
+
+    const exportBtn = getEl("btn-export-save");
+    if (exportBtn) {
+      exportBtn.addEventListener("click", () => {
+        const json = DesktopBridge.exportSavePayload();
+        if (!json) {
+          showSettingsStatusMessage("⚠️ No active run save available to export.", true);
+          return;
+        }
+        try {
+          const blob = new Blob([json], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          const dateTag = new Date().toISOString().slice(0, 10);
+          a.href = url;
+          a.download = `manastorm-save-${dateTag}.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          showSettingsStatusMessage("✅ Exported save backup (.json)!");
+        } catch (_) {
+          showSettingsStatusMessage("⚠️ Unable to trigger file download; use Copy Save JSON instead.", true);
+        }
+      });
+    }
+
+    const copyBtn = getEl("btn-copy-save");
+    if (copyBtn) {
+      copyBtn.addEventListener("click", async () => {
+        const json = DesktopBridge.exportSavePayload();
+        if (!json) {
+          showSettingsStatusMessage("⚠️ No active run save available to copy.", true);
+          return;
+        }
+        const textarea = getEl("textarea-import-save");
+        const importBox = getEl("settings-import-box");
+        if (textarea) textarea.value = json;
+        if (importBox) importBox.hidden = false;
+        if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+          try {
+            await navigator.clipboard.writeText(json);
+            showSettingsStatusMessage("✅ Save JSON copied to clipboard!");
+            return;
+          } catch (_) {}
+        }
+        showSettingsStatusMessage("✅ Save JSON placed in the text box below!");
+      });
+    }
+
+    const toggleImportBtn = getEl("btn-toggle-import-save");
+    if (toggleImportBtn) {
+      toggleImportBtn.addEventListener("click", () => {
+        const importBox = getEl("settings-import-box");
+        if (importBox) importBox.hidden = !importBox.hidden;
+      });
+    }
+
+    const fileInput = getEl("input-import-file");
+    if (fileInput) {
+      fileInput.addEventListener("change", async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const textarea = getEl("textarea-import-save");
+          if (textarea) textarea.value = text;
+          showSettingsStatusMessage(`📂 Loaded ${file.name} — click Restore Imported Run to apply.`);
+        } catch (_) {
+          showSettingsStatusMessage("⚠️ Failed to read the selected save file.", true);
+        }
+      });
+    }
+
+    const confirmImportBtn = getEl("btn-confirm-import-save");
+    if (confirmImportBtn) {
+      confirmImportBtn.addEventListener("click", async () => {
+        const textarea = getEl("textarea-import-save");
+        const raw = textarea ? textarea.value : "";
+        const res = await DesktopBridge.importSavePayload(raw);
+        if (!res.ok) {
+          showSettingsStatusMessage(`⚠️ ${res.error}`, true);
+          return;
+        }
+        showSettingsStatusMessage(
+          `✅ Restored ${res.summary.archetype} (Encounter ${res.summary.encounter})!`
+        );
+        renderDesktopSettingsModal();
+        setTimeout(() => {
+          safeCloseModal(settingsDialog);
+        }, 450);
+      });
+    }
+
+    const settingsNewRunBtn = getEl("btn-settings-newrun");
+    if (settingsNewRunBtn) {
+      settingsNewRunBtn.addEventListener("click", () => {
+        safeCloseModal(settingsDialog);
+        openNewRunModal(Boolean(state.runOver));
+      });
+    }
+
+    const quitBtn = getEl("btn-quit-desktop");
+    if (quitBtn) {
+      quitBtn.addEventListener("click", () => {
+        DesktopBridge.quitApp();
+      });
+    }
+  }
+
+  if (typeof HTMLDialogElement !== "undefined" && !("closedBy" in HTMLDialogElement.prototype)) {
     const outside = (e, dialog) => {
       const r = dialog.getBoundingClientRect();
       return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
     };
-    for (const dialog of document.querySelectorAll("dialog")) {
+    for (const dialog of queryAll("dialog")) {
       let pressedOutside = false;
       dialog.addEventListener("pointerdown", (e) => {
         pressedOutside = dialog.getAttribute("closedby") === "any" && outside(e, dialog);
       });
       dialog.addEventListener("pointerup", (e) => {
         if (pressedOutside && dialog.getAttribute("closedby") === "any" && outside(e, dialog)) {
-          dialog.close();
+          safeCloseModal(dialog);
         }
       });
     }

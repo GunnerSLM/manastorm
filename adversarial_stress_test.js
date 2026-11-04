@@ -1180,6 +1180,52 @@ console.log("--- 17. Comprehensive Cancellation Matrix ---");
   }
 }
 
+// ============================================================================
+// 18. INTERRUPTED POINTER CAPTURE (lostpointercapture), PRIMARY BUTTON GUARD & UNIFIED RESET
+// ============================================================================
+console.log("--- 18. Interrupted Pointer Capture (lostpointercapture) & Primary Button Guard ---");
+{
+  const card = { uid: "lpc-card", name: "Counterspell", type: "Instant", color: "U", manaCost: "{U}{U}" };
+  state.hand = [card];
+  const el = createMockElement("button", "btn-lpc", "hand-card");
+  el.dataset.handUid = card.uid;
+
+  const ctrl = createHandDragController();
+
+  // 18.1 Non-primary mouse button (right-click button=2, middle-click button=1) is ignored
+  ctrl.handlePointerDown({ target: el, pointerId: 1801, button: 2, clientX: 200, clientY: 500 });
+  assert(ctrl.getState() === "idle", "18.1 Right-click (button=2) does not arm drag controller");
+  ctrl.handlePointerDown({ target: el, pointerId: 1802, button: 1, clientX: 200, clientY: 500 });
+  assert(ctrl.getState() === "idle", "18.1 Middle-click (button=1) does not arm drag controller");
+
+  // 18.2 Primary mouse button (button=0) arms controller and captures pointer
+  ctrl.handlePointerDown({ target: el, pointerId: 1803, button: 0, clientX: 200, clientY: 500 });
+  assert(
+    ctrl.getState() === "armed" && ctrl.getDragState().hasPointerCapture === true,
+    "18.2 Primary button (button=0) arms controller and records hasPointerCapture=true"
+  );
+
+  // 18.3 Unrelated pointer's lostpointercapture is ignored
+  ctrl.handleLostPointerCapture({ pointerId: 9999 });
+  assert(ctrl.getState() === "armed", "18.3 Unrelated pointerId lostpointercapture does not interrupt active pointer");
+
+  // 18.4 Active pointer's lostpointercapture during 'dragging' immediately resets state and visuals
+  ctrl.handlePointerMove({ pointerId: 1803, clientX: 200, clientY: 420 });
+  assert(ctrl.getState() === "dragging" && el.classList.contains("is-dragging"), "18.4 Active pointer enters dragging");
+
+  ctrl.handleLostPointerCapture({ pointerId: 1803 });
+  const snapAfterLPC = ctrl.getDragState();
+  assert(
+    ctrl.getState() === "idle" &&
+    snapAfterLPC.hasPointerCapture === false &&
+    snapAfterLPC.cardEl === null &&
+    snapAfterLPC.lastResetReason === "lostpointercapture" &&
+    !el.classList.contains("is-dragging") &&
+    el.style.getPropertyValue("--drag-x") === "",
+    "18.4 lostpointercapture during dragging resets dragState to idle and cleans up all styles"
+  );
+}
+
 console.log("=================================================");
 console.log(`ADVERSARIAL STRESS TEST COMPLETE: ${passedTests} passed, ${failedTests} failed out of ${totalTests} assertions`);
 console.log("=================================================");
