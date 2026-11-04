@@ -98,6 +98,10 @@
           <span>🪦 Graveyard</span>
           <strong id="graveyard-count">0</strong>
         </button>
+        <button type="button" class="zone-btn" id="btn-view-route" title="Inspect or choose your path on the Planar Route Map (Shortcut: R)">
+          <span>🗺️ Planar Route</span>
+          <strong id="route-step-badge">1/7</strong>
+        </button>
         <button type="button" class="zone-btn" id="btn-new-run" title="Start a new run or switch Planeswalker guild">
           <span>🔄 New Run / Deck</span>
         </button>
@@ -221,6 +225,36 @@
   <!-- Floating Popups Container -->
   <div id="fx-layer" class="fx-layer" popover="manual" aria-hidden="true"></div>
 
+  <!-- MODAL 0: Post-Battle Card Draft -->
+  <dialog id="draft-dialog" class="modal-dialog draft-dialog" closedby="none" aria-labelledby="draft-title">
+    <div class="modal-inner draft-modal">
+      <header class="modal-header">
+        <div>
+          <span class="plane-badge" id="draft-plane-badge">VICTORY • POST-BATTLE CARD DRAFT</span>
+          <h2 id="draft-title">Draft a Card into Your Deck</h2>
+        </div>
+        <div class="shop-gold-pill">Current Gold: <strong id="draft-gold">$10</strong></div>
+      </header>
+
+      <p class="deck-modal-desc" id="draft-desc">
+        Encounter defeated! Choose 1 card to permanently draft into your deck, or skip for a +$2 Gold bounty before entering the Sanctum Shop.
+      </p>
+
+      <div class="draft-card-grid" id="draft-card-grid" role="region" aria-label="Draft Card Choices">
+        <!-- Draft Cards rendered dynamically -->
+      </div>
+
+      <footer class="modal-footer draft-modal-footer">
+        <div class="draft-deck-info" id="draft-deck-info">
+          Deck: <strong id="draft-deck-count">40 Cards</strong>
+        </div>
+        <button type="button" class="btn-secondary btn-skip-draft" id="btn-skip-draft" autofocus>
+          ⏩ Skip Draft (+$2 Gold)
+        </button>
+      </footer>
+    </div>
+  </dialog>
+
   <!-- MODAL 1: Post-Battle Blind Eternities Shop & Card Enchanting -->
   <dialog id="shop-dialog" closedby="none" aria-labelledby="shop-title">
     <div class="modal-inner shop-modal">
@@ -330,6 +364,24 @@
         <button type="button" class="btn-secondary" id="btn-victory-newrun">🔄 Start a Fresh Run</button>
         <button type="button" class="btn-combat" id="btn-endless-continue" autofocus>♾️ Enter Endless Loop (2.5× Boss HP)</button>
       </footer>
+    </div>
+  </dialog>
+
+  <!-- MODAL 6B: Branching Planar Route Map -->
+  <dialog id="route-dialog" closedby="any" aria-labelledby="route-dialog-title">
+    <div class="modal-inner route-modal">
+      <header class="modal-header">
+        <div>
+          <span class="plane-badge" id="route-plane-badge">BLIND ETERNITIES • PLANAR ROUTE MAP</span>
+          <h2 id="route-dialog-title">Choose Your Next Planar Stop</h2>
+        </div>
+        <form method="dialog" id="route-close-form">
+          <button type="submit" class="btn-close" id="btn-close-route-dialog">✕ Close</button>
+        </form>
+      </header>
+      <p class="deck-modal-desc" id="route-dialog-desc">Navigate the branching paths of the Blind Eternities. Choose between combat wards, leylines, planar anomalies, and sanctum outposts.</p>
+      <div class="route-activity-banner" id="route-activity-banner" hidden></div>
+      <div class="route-map-grid" id="route-map-grid" role="region" aria-label="Branching Planar Route Map"></div>
     </div>
   </dialog>
 

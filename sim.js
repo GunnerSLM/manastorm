@@ -41,22 +41,41 @@ function scoreLandToPlay(land) {
 
 function scoreSpellToCast(card) {
   const cmc = cardManaValue(card);
-  // Sequence engine creatures (Lotus Cobra, Prowess, Ledger Shredder, Pridemate, Llanowar Elves) BEFORE instants/sorceries
+  // Sequence engine creatures (Lotus Cobra, Prowess, Ledger Shredder, Pridemate, Llanowar Elves, Self-Mill) BEFORE instants/sorceries
   if (card.type === "Creature") {
     if (card.etb === "mana_dork" || card.upkeep === "sentinel") return 80 + cmc;
+    if (card.etb === "supplier" || card.etb === "wayfinder") return 82 + cmc;
+    if (card.etb === "overseer") return 62;
+    if (card.etb === "modular") return 48 + state.playerCreatures.length * 4;
+    if (card.etb === "fiend_artisan") {
+      const gyCreatures = state.graveyard.filter(c => c.type === "Creature").length;
+      return 48 + gyCreatures * 5;
+    }
     if (card.landfall || (card.keywords && card.keywords.includes("Prowess")) || card.connive || card.onLifegain) {
       return 70 + cmc;
     }
     return 50 + cmc * 10;
   }
-  // Rituals & Ramp first so we can cast bigger threats with the mana
-  if (card.effect === "ritual" || card.effect === "dark_ritual" || card.effect === "cultivate") {
+  // Rituals & Ramp & Self-Mill/Treasure Draw first so we can cast bigger threats or grow Undergrowth
+  if (
+    card.effect === "ritual" ||
+    card.effect === "dark_ritual" ||
+    card.effect === "cultivate" ||
+    card.effect === "thoughtcast" ||
+    card.effect === "draw_2"
+  ) {
     return 90 + cmc;
+  }
+  if (card.effect === "grisly_salvage") {
+    return 88;
   }
   // Card draw / reanimate / token creation before board-wide buffs
   if (card.effect === "reanimate") {
     const hasGyCreature = state.graveyard.some(c => c.type === "Creature");
     return hasGyCreature ? 85 : 55;
+  }
+  if (card.effect === "spider_spawning" || card.effect === "thopter_foundry") {
+    return 72 + cmc;
   }
   if (card.effect === "village_rites") {
     // Only cast Village Rites if we have no creatures, or have a token/1-drop, or need cards late
@@ -64,7 +83,12 @@ function scoreSpellToCast(card) {
       state.playerCreatures.some(c => c.isToken || c.power <= 2);
     return hasExpendable ? 65 : -10;
   }
-  if (card.effect === "overrun" || card.effect === "battle_rage" || card.effect === "formation") {
+  if (
+    card.effect === "overrun" ||
+    card.effect === "battle_rage" ||
+    card.effect === "formation" ||
+    card.effect === "cyberdrive"
+  ) {
     return state.playerCreatures.length > 0 ? 30 + cmc * 5 : -10;
   }
   return 40 + cmc * 10;
@@ -220,6 +244,48 @@ function aiShopStep() {
   }
 }
 
+function aiDraftStep() {
+  if (!state.pendingDraft || state.pendingDraft.resolved || !Array.isArray(state.pendingDraft.choices)) {
+    return;
+  }
+  const choices = state.pendingDraft.choices
+    .map(c => typeof c === "string" ? CARD_DB[c] : c)
+    .filter(Boolean);
+
+  if (choices.length === 0) {
+    skipDraft();
+    return;
+  }
+
+  // If deck is already sufficiently large (>= 44 cards), take +$2 gold bounty
+  if (state.masterDeck.length >= 44) {
+    skipDraft();
+    return;
+  }
+
+  // Score candidate cards
+  let bestIdx = 0;
+  let bestScore = -1;
+  choices.forEach((card, idx) => {
+    let score = 0;
+    if (card.type === "Land") {
+      score = typeof scoreLandToPlay === "function" ? scoreLandToPlay(card) : 30;
+    } else {
+      score = typeof scoreSpellToCast === "function" ? scoreSpellToCast(card) : ((card.power || 0) * 10 + 20);
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestIdx = idx;
+    }
+  });
+
+  if (bestScore >= 25) {
+    selectDraftCard(bestIdx);
+  } else {
+    skipDraft();
+  }
+}
+
 function simulateFullCampaign(deckConfig) {
   startNewRun(deckConfig);
   const cleared = [false, false, false, false, false, false];
@@ -235,6 +301,7 @@ function simulateFullCampaign(deckConfig) {
     }
     if (state.enemyLife <= 0 && !state.runOver) {
       cleared[encIdx] = true;
+      aiDraftStep();
       aiShopStep();
     } else {
       break;
@@ -274,7 +341,7 @@ STARTER_DECKS.forEach(deck => {
 });
 
 // Relic Impact Benchmark on Encounter 2 (Krenko) & Encounter 3 (Sheoldred)
-console.log(`\n=== RELIC MARGINAL IMPACT vs PRICE ANALYSIS (Across All 4 Starter Decks, E3 Sheoldred) ===`);
+console.log(`\n=== RELIC MARGINAL IMPACT vs PRICE ANALYSIS (Across All ${STARTER_DECKS.length} Starter Decks, E3 Sheoldred) ===`);
 const N_RELIC_SIMS = 400;
 
 function measureRelicWinRate(extraRelicId) {

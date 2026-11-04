@@ -6,6 +6,7 @@ let targetDialogPendingFallback = null;
 let targetDialogActive = false;
 const targetDialogQueue = [];
 let newRunForceChoice = false;
+let routeForceChoice = false;
 
 function isHeadlessEnv() {
   return Boolean((typeof state !== "undefined" && state.headless) || typeof document === "undefined");
@@ -98,14 +99,14 @@ function openColorPickerModal(title, desc, choices, allowCancel = false) {
     // Smart headless choice: prefer a color required by spells in hand that we have least of
     let bestChoice = choices[0];
     if (typeof state !== "undefined" && state.hand) {
-      const neededByCol = { G: 0, R: 0, B: 0, U: 0, W: 0 };
+      const neededByCol = { G: 0, R: 0, B: 0, U: 0, W: 0, C: 0 };
       state.hand.forEach(c => {
         if (c.type !== "Land" && c.manaCost) {
           const parsed = parseManaCost(c.manaCost);
           COLORS.forEach(col => { neededByCol[col] += parsed.pips[col] || 0; });
         }
       });
-      const producedByCol = { G: 0, R: 0, B: 0, U: 0, W: 0 };
+      const producedByCol = { G: 0, R: 0, B: 0, U: 0, W: 0, C: 0 };
       state.playerLands.forEach(l => {
         if (l.produces.length === 1) producedByCol[l.produces[0]]++;
       });
@@ -231,7 +232,7 @@ function handleTargetDialogClose() {
   }
 }
 
-const CARD_SELECTOR = ".card, .hand-card, .board-card, .land-card, .relic-card, .shop-item-card, .inspector-card";
+const CARD_SELECTOR = ".card, .hand-card, .board-card, .land-card, .relic-card, .shop-item-card, .inspector-card, .draft-card";
 
 function prefersReducedMotion() {
   if (typeof state !== "undefined" && state.prefersReducedMotion !== undefined) {
@@ -524,7 +525,7 @@ function buildManaPoolItems() {
     });
   }
 
-  const untappedCounts = { G: 0, R: 0, B: 0, U: 0, W: 0, Dual: 0 };
+  const untappedCounts = { G: 0, R: 0, B: 0, U: 0, W: 0, C: 0, Dual: 0 };
   state.playerLands.filter(l => !l.tapped).forEach(l => {
     if (l.produces.length > 1) untappedCounts.Dual++;
     else if (l.produces[0]) untappedCounts[l.produces[0]]++;
@@ -679,6 +680,7 @@ function getCardArtTheme(c) {
     if (col === "B") return "swamp";
     if (col === "U") return "island";
     if (col === "W") return "plains";
+    if (col === "C") return "construct";
     return "dual";
   }
   if (name.includes("dragon") || sub.includes("dragon") || name.includes("hellkite")) return "dragon";
@@ -1134,8 +1136,15 @@ function renderBossPanel(enc, lifePct) {
 
   const encPos = state.encounterIdx % ENCOUNTERS.length;
   const loop = Math.floor(state.encounterIdx / ENCOUNTERS.length);
+  const currentNode = typeof getCurrentRouteNode === "function" ? getCurrentRouteNode() : null;
+  const totalRouteSteps = typeof CAMPAIGN_ROUTE_NODES !== "undefined" && Array.isArray(CAMPAIGN_ROUTE_NODES)
+    ? Math.max(...CAMPAIGN_ROUTE_NODES.map(n => n.step)) + 1
+    : ENCOUNTERS.length;
+  const curStep = currentNode && typeof currentNode.step === "number" ? currentNode.step + 1 : encPos + 1;
+  setText("route-step-badge", `${curStep}/${totalRouteSteps}`);
+
   const ladderHtml = ENCOUNTERS.map((e, i) =>
-    `<span class="ladder-node ${i < encPos ? "done" : ""} ${i === encPos ? "current" : ""}" title="${e.name}">${i < encPos ? "✓" : i + 1}</span>`
+    `<span class="ladder-node ${i < encPos ? "done" : ""} ${i === encPos ? "current" : ""}" title="${e.name} (Click to inspect Planar Route)">${i < encPos ? "✓" : i + 1}</span>`
   ).join('<span class="ladder-link"></span>') + (loop > 0 ? `<small class="ladder-loop">Loop ${loop + 1}</small>` : "");
   patchInnerHtmlIfChanged(getEl("encounter-ladder"), ladderHtml);
 }
@@ -1989,15 +1998,23 @@ function openNewRunModal(forceChoice = false, customTitle = null, customDesc = n
 
   const grid = getEl("starter-decks-grid");
   if (grid) {
-    grid.innerHTML = STARTER_DECKS.map((d, idx) => `
-      <button type="button" class="starter-deck-box" data-starter-idx="${idx}">
-        <span class="plane-badge">${d.badge}</span>
-        <h3>${d.name}</h3>
-        <p class="relic-desc">${d.desc}</p>
-        <div class="zone-hint">Starting Relic: <strong>${RELIC_DB.find(r => r.id === d.startingRelic).name}</strong></div>
-        <span class="btn-combat" style="margin-top:auto">Play This 40-Card Deck</span>
-      </button>
-    `).join("");
+    const availableDecks = typeof getAvailableStarterDecks === "function"
+      ? getAvailableStarterDecks()
+      : STARTER_DECKS;
+    const decksToRender = availableDecks.length > 0 ? availableDecks : STARTER_DECKS;
+    grid.innerHTML = decksToRender.map(d => {
+      const idx = STARTER_DECKS.indexOf(d);
+      const relicDef = RELIC_DB.find(r => r.id === d.startingRelic);
+      return `
+        <button type="button" class="starter-deck-box" data-starter-idx="${idx >= 0 ? idx : 0}" data-starter-id="${d.id}">
+          <span class="plane-badge">${d.badge}</span>
+          <h3>${d.name}</h3>
+          <p class="relic-desc">${d.desc}</p>
+          <div class="zone-hint">Starting Relic: <strong>${relicDef ? relicDef.name : d.startingRelic}</strong></div>
+          <span class="btn-combat" style="margin-top:auto">Play This 40-Card Deck</span>
+        </button>
+      `;
+    }).join("");
   }
   safeShowModal(dialog);
 }
@@ -2025,6 +2042,78 @@ function openVictoryModal(enc, earned, healed) {
   safeShowModal(dialog);
 }
 
+function openDraftModal(enc) {
+  if (isHeadlessEnv()) return;
+  const dialog = getEl("draft-dialog");
+  if (!dialog) return;
+
+  const currentEnc = enc || (typeof getCurrentEncounter === "function" ? getCurrentEncounter() : null);
+  if (currentEnc) {
+    setText("draft-plane-badge", `VICTORY • ${currentEnc.name.toUpperCase()} DEFEATED`);
+  }
+  setText("draft-gold", `$${state.gold}`);
+  setText("draft-deck-count", `${state.masterDeck.length} Cards`);
+
+  renderDraftModal();
+  safeShowModal(dialog);
+}
+
+function renderDraftModal() {
+  if (isHeadlessEnv()) return;
+  const grid = getEl("draft-card-grid");
+  if (!grid) return;
+
+  setText("draft-gold", `$${state.gold}`);
+  setText("draft-deck-count", `${state.masterDeck.length} Cards`);
+
+  if (!state.pendingDraft || !Array.isArray(state.pendingDraft.choices) || state.pendingDraft.choices.length === 0) {
+    grid.innerHTML = `<div class="draft-empty-state">No draft cards available.</div>`;
+    return;
+  }
+
+  const choices = state.pendingDraft.choices;
+  grid.innerHTML = choices.map((item, idx) => {
+    const cardId = typeof item === "string" ? item : (item && item.id ? item.id : null);
+    const card = cardId && typeof CARD_DB !== "undefined" ? CARD_DB[cardId] : item;
+    if (!card) return "";
+
+    const isCreature = card.type === "Creature";
+    const dispPow = isCreature ? (card.power || 0) + (card.permPowerBonus || 0) : 0;
+    const dispTough = isCreature ? (card.toughness || 0) + (card.permToughnessBonus || 0) : 0;
+    const foilCls = card.foil ? ` foil-card-${card.foil}` : "";
+    const manaHtml = typeof renderManaCostHtml === "function" ? renderManaCostHtml(card) : "";
+
+    return `
+      <div class="draft-card card card-color-${card.color}${foilCls}" data-draft-idx="${idx}" data-card-id="${card.id}">
+        <div class="draft-card-content">
+          <div class="draft-card-header">
+            <span class="draft-card-title">${card.name}</span>
+            ${manaHtml}
+          </div>
+          <div class="draft-card-type">${card.type}${card.subtype ? ` — ${card.subtype}` : ""}</div>
+          <div class="draft-card-rules">${card.rules || ""}</div>
+        </div>
+        <div class="draft-card-bottom">
+          <div class="pt-box-container">
+            ${isCreature ? `<span class="pt-box">${dispPow}/${dispTough}</span>` : ""}
+          </div>
+          <button type="button" class="btn-combat btn-draft-select" data-draft-choice="${idx}">
+            ✨ Draft Card
+          </button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function closeDraftModal() {
+  if (isHeadlessEnv()) return;
+  const dialog = getEl("draft-dialog");
+  if (dialog) {
+    safeCloseModal(dialog);
+  }
+}
+
 function presentVictoryOrShopModal(enc, earned, healed, badgeText, summaryText) {
   if (isHeadlessEnv()) return;
   setText("shop-plane-badge", badgeText);
@@ -2033,6 +2122,8 @@ function presentVictoryOrShopModal(enc, earned, healed, badgeText, summaryText) 
   renderAll();
   if (state.encounterIdx === ENCOUNTERS.length - 1) {
     openVictoryModal(enc, earned, healed);
+  } else if (state.pendingDraft && !state.pendingDraft.resolved) {
+    openDraftModal(enc);
   } else {
     safeShowModal("shop-dialog");
   }
@@ -2040,10 +2131,156 @@ function presentVictoryOrShopModal(enc, earned, healed, badgeText, summaryText) 
 
 function openRestoredShopModal(enc) {
   if (isHeadlessEnv()) return;
+  if (state.pendingDraft && !state.pendingDraft.resolved) {
+    openDraftModal(enc);
+    return;
+  }
   setText("shop-plane-badge", `CLEARED PLANE ${enc.plane} • ${enc.tier}`);
   setText("victory-reward-summary", `Restored Sanctum Shop after defeating ${enc.name}.`);
   renderShop();
   safeShowModal("shop-dialog");
+}
+
+function renderRouteModal(forceChoice = false) {
+  if (isHeadlessEnv()) return;
+  const dialog = getEl("route-dialog");
+  const grid = getEl("route-map-grid");
+  if (!dialog || !grid || typeof CAMPAIGN_ROUTE_NODES === "undefined") return;
+
+  const route = typeof ensureRouteState === "function" ? ensureRouteState() : state.route;
+  const availableNext = typeof getAvailableNextRouteNodes === "function" ? getAvailableNextRouteNodes() : [];
+  const availableIds = new Set(availableNext.map(n => n.id));
+  const completedIds = new Set(route && Array.isArray(route.completedNodeIds) ? route.completedNodeIds : []);
+  const visitedIds = new Set(route && Array.isArray(route.visitedNodeIds) ? route.visitedNodeIds : []);
+  const currentId = route ? route.currentNodeId : "p1_start";
+  const currentNode = typeof getCurrentRouteNode === "function" ? getCurrentRouteNode() : null;
+  const currentStep = currentNode ? currentNode.step : 0;
+
+  const mustChoose = Boolean((forceChoice || (route && route.pendingSelection)) && availableIds.size > 0);
+  routeForceChoice = mustChoose;
+
+  if (typeof dialog.setAttribute === "function") {
+    dialog.setAttribute("closedby", mustChoose ? "none" : "any");
+  }
+  const closeForm = getEl("route-close-form");
+  if (closeForm) {
+    closeForm.hidden = mustChoose;
+  }
+
+  const loopNum = (route && route.loop ? route.loop : 0) + 1;
+  const loopSuffix = loopNum > 1 ? ` • LOOP ${loopNum}` : "";
+  setText(
+    "route-plane-badge",
+    mustChoose
+      ? `CHOOSE NEXT STOP • PLANAR ROUTE MAP${loopSuffix}`
+      : `BLIND ETERNITIES • PLANAR ROUTE MAP${loopSuffix}`
+  );
+  setText(
+    "route-dialog-title",
+    mustChoose ? "Choose Your Next Planar Stop" : "Blind Eternities Planar Route"
+  );
+  setText(
+    "route-dialog-desc",
+    mustChoose
+      ? "Select a connected node below to travel to your next destination. Rest Sites and Planar Events resolve immediately on the route map."
+      : "Inspect your journey across Plane 1 and Plane 2. Defeat the current Ward to unlock the next branching stop."
+  );
+
+  const banner = getEl("route-activity-banner");
+  if (banner) {
+    if (route && route.lastActivitySummary) {
+      banner.hidden = false;
+      banner.textContent = `✨ Last Stop: ${route.lastActivitySummary}`;
+    } else {
+      banner.hidden = true;
+      banner.textContent = "";
+    }
+  }
+
+  const stepsMap = new Map();
+  CAMPAIGN_ROUTE_NODES.forEach(node => {
+    if (!stepsMap.has(node.step)) stepsMap.set(node.step, []);
+    stepsMap.get(node.step).push(node);
+  });
+
+  const sortedSteps = Array.from(stepsMap.keys()).sort((a, b) => a - b);
+  grid.innerHTML = sortedSteps.map(stepIdx => {
+    const nodes = stepsMap.get(stepIdx);
+    const planeNum = nodes[0] ? nodes[0].plane : 1;
+    const isBranchStep = nodes.length > 1;
+    const nodesHtml = nodes.map(node => {
+      const typeMeta = (typeof ROUTE_NODE_TYPES !== "undefined" && ROUTE_NODE_TYPES[node.type])
+        ? ROUTE_NODE_TYPES[node.type]
+        : { icon: "📍", badge: String(node.type || "NODE").toUpperCase() };
+      const isCompleted = completedIds.has(node.id);
+      const isCurrent = node.id === currentId && !isCompleted;
+      const isAvailable = availableIds.has(node.id);
+      const isVisited = visitedIds.has(node.id);
+      const isBypassed = !isCompleted && !isCurrent && !isAvailable && !isVisited && currentStep >= node.step;
+
+      let stateClass = "route-node-locked";
+      let statusLabel = "🔒 Ahead";
+      if (isAvailable) {
+        stateClass = "route-node-available";
+        statusLabel = "⚡ Click to Travel Here";
+      } else if (isCurrent) {
+        stateClass = "route-node-current";
+        statusLabel = "⚔️ Active Stop";
+      } else if (isCompleted) {
+        stateClass = "route-node-completed";
+        statusLabel = "✓ Completed";
+      } else if (isBypassed) {
+        stateClass = "route-node-bypassed";
+        statusLabel = "— Path Bypassed";
+      }
+
+      const nextTitles = (node.next || [])
+        .map(nid => CAMPAIGN_ROUTE_NODES.find(n => n.id === nid))
+        .filter(Boolean)
+        .map(n => n.title);
+      const leadsToHtml = nextTitles.length > 0
+        ? `<div class="route-node-links">Leads to: ${nextTitles.join(" / ")}</div>`
+        : `<div class="route-node-links">Final Planar Overlord</div>`;
+
+      return `
+        <button type="button"
+          class="route-node-card route-type-${node.type} ${stateClass}"
+          data-route-node-id="${node.id}"
+          data-route-node-type="${node.type}"
+          ${isAvailable ? "" : "disabled"}
+          aria-label="${node.title} (${typeMeta.badge}) - ${statusLabel}">
+          <div class="route-node-top">
+            <span class="route-type-badge route-badge-${node.type}">${typeMeta.icon} ${typeMeta.badge}</span>
+            <span class="route-status-pill">${statusLabel}</span>
+          </div>
+          <div class="route-node-title">${node.title}</div>
+          <div class="route-node-subtitle">${node.subtitle || ""}</div>
+          <div class="route-node-desc">${node.desc}</div>
+          ${leadsToHtml}
+        </button>
+      `;
+    }).join("");
+
+    return `
+      <div class="route-step-row ${isBranchStep ? "route-step-branch" : "route-step-single"}" data-route-step="${stepIdx}">
+        <div class="route-step-header">
+          <span class="route-step-num">STEP ${stepIdx + 1}</span>
+          <span class="route-step-plane">PLANE ${planeNum}${isBranchStep ? " • CHOOSE 1 PATH" : ""}</span>
+        </div>
+        <div class="route-step-nodes">
+          ${nodesHtml}
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function openRouteModal(forceChoice = false) {
+  if (isHeadlessEnv()) return;
+  const dialog = getEl("route-dialog");
+  if (!dialog) return;
+  renderRouteModal(forceChoice);
+  safeShowModal(dialog);
 }
 
 let activeTiltedCard = null;
@@ -2651,6 +2888,9 @@ if (typeof globalThis !== "undefined") {
   globalThis.scheduleRender = scheduleRender;
   globalThis.flushScheduledRender = flushScheduledRender;
   globalThis.renderIncremental = renderIncremental;
+  globalThis.openDraftModal = openDraftModal;
+  globalThis.renderDraftModal = renderDraftModal;
+  globalThis.closeDraftModal = closeDraftModal;
 }
 
 function showSettingsStatusMessage(message, isError = false) {
@@ -2864,6 +3104,9 @@ function initEvents() {
         "Resolved Spells, cracked Fetch Lands, and fallen Creatures.",
         state.graveyard
       );
+    } else if (e.key === "r" || e.key === "R") {
+      cancelHandDrag("route");
+      openRouteModal(Boolean(state.route && state.route.pendingSelection));
     } else if (e.key === ",") {
       cancelHandDrag("settings");
       openDesktopSettingsModal();
@@ -2900,6 +3143,48 @@ function initEvents() {
     });
   }
 
+  const viewRouteBtn = getEl("btn-view-route");
+  if (viewRouteBtn) {
+    viewRouteBtn.addEventListener("click", () => {
+      openRouteModal(Boolean(state.route && state.route.pendingSelection));
+    });
+  }
+
+  const ladderEl = getEl("encounter-ladder");
+  if (ladderEl) {
+    ladderEl.addEventListener("click", () => {
+      openRouteModal(Boolean(state.route && state.route.pendingSelection));
+    });
+  }
+
+  const routeDialog = getEl("route-dialog");
+  if (routeDialog) {
+    routeDialog.addEventListener("cancel", (e) => {
+      if (routeForceChoice || (typeof routeDialog.getAttribute === "function" && routeDialog.getAttribute("closedby") === "none")) {
+        e.preventDefault();
+      }
+    });
+  }
+
+  const routeGrid = getEl("route-map-grid");
+  if (routeGrid) {
+    routeGrid.addEventListener("click", (e) => {
+      const btn = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-route-node-id]") : null;
+      if (!btn || btn.disabled) return;
+      const nodeId = btn.dataset.routeNodeId;
+      if (typeof canSelectRouteNode === "function" && !canSelectRouteNode(nodeId)) return;
+      const node = typeof getRouteNodeById === "function" ? getRouteNodeById(nodeId) : null;
+      const ok = typeof selectRouteNode === "function" ? selectRouteNode(nodeId) : false;
+      if (!ok) return;
+      if (!node || node.type === "fight" || node.type === "elite" || node.type === "boss" || node.type === "shop") {
+        routeForceChoice = false;
+        safeCloseModal(routeDialog);
+      } else {
+        renderRouteModal(true);
+      }
+    });
+  }
+
   const newRunBtn = getEl("btn-new-run");
   if (newRunBtn) {
     newRunBtn.addEventListener("click", () => {
@@ -2919,13 +3204,15 @@ function initEvents() {
   const starterGrid = getEl("starter-decks-grid");
   if (starterGrid) {
     starterGrid.addEventListener("click", (e) => {
-      const box = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-starter-idx]") : null;
+      const box = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-starter-idx], [data-starter-id]") : null;
       if (box) {
+        const deckById = box.dataset.starterId ? STARTER_DECKS.find(d => d.id === box.dataset.starterId) : null;
         const idx = Number(box.dataset.starterIdx);
+        const chosenDeck = deckById || STARTER_DECKS[idx] || STARTER_DECKS[0];
         newRunForceChoice = false;
         safeCloseModal(newrunDialog);
         clearRunState();
-        startNewRun(STARTER_DECKS[idx]);
+        startNewRun(chosenDeck);
       }
     });
   }
@@ -2949,6 +3236,39 @@ function initEvents() {
         openNewRunModal(true, "🏆 Planeswalker Ascendant — Start a New Run");
       });
     }
+  }
+
+  const draftDialog = getEl("draft-dialog");
+  if (draftDialog) {
+    draftDialog.addEventListener("cancel", (e) => {
+      e.preventDefault();
+    });
+
+    draftDialog.addEventListener("click", (e) => {
+      if (!e.target || typeof e.target.closest !== "function") return;
+      const skipBtn = e.target.closest("#btn-skip-draft, .btn-skip-draft");
+      if (skipBtn) {
+        if (typeof skipDraft === "function") {
+          skipDraft();
+        }
+        return;
+      }
+      const selectBtn = e.target.closest("[data-draft-choice], [data-draft-pick]");
+      if (selectBtn) {
+        const choiceIdx = Number(selectBtn.dataset.draftChoice ?? selectBtn.dataset.draftPick);
+        if (Number.isFinite(choiceIdx) && typeof selectDraftCard === "function") {
+          selectDraftCard(choiceIdx);
+        }
+        return;
+      }
+      const draftCard = e.target.closest(".draft-card[data-draft-idx]");
+      if (draftCard) {
+        const choiceIdx = Number(draftCard.dataset.draftIdx);
+        if (Number.isFinite(choiceIdx) && typeof selectDraftCard === "function") {
+          selectDraftCard(choiceIdx);
+        }
+      }
+    });
   }
 
   const shopDialog = getEl("shop-dialog");
@@ -3007,6 +3327,19 @@ function initEvents() {
   if (nextEncBtn) {
     nextEncBtn.addEventListener("click", () => {
       safeCloseModal(shopDialog);
+      const nextNodes = typeof getAvailableNextRouteNodes === "function" ? getAvailableNextRouteNodes() : [];
+      if (nextNodes.length > 0) {
+        if (!isHeadlessEnv() && getEl("route-dialog")) {
+          openRouteModal(true);
+        } else if (typeof selectRouteNode === "function") {
+          selectRouteNode(nextNodes[0].id);
+        }
+        return;
+      }
+      if (typeof advanceToNextLoopRoute === "function" && state.route && state.route.completedNodeIds.includes("p2_boss")) {
+        advanceToNextLoopRoute();
+        return;
+      }
       state.encounterIdx++;
       beginEncounter();
       saveRunState(false);

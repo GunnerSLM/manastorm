@@ -75,6 +75,70 @@ function isValidEncounterSnapshotObject(snap) {
   return true;
 }
 
+function normalizeRouteObject(rawRoute, encounterIdx = 0, inShop = false) {
+  const encCount =
+    typeof ENCOUNTERS !== "undefined" && Array.isArray(ENCOUNTERS) && ENCOUNTERS.length > 0
+      ? ENCOUNTERS.length
+      : 6;
+  const safeEncIdx = Math.max(0, Math.floor(Number(encounterIdx) || 0));
+  const defaultLoop = Math.floor(safeEncIdx / encCount);
+  const encMod = safeEncIdx % encCount;
+
+  const fallbackPathByEnc = [
+    { current: "p1_start", prior: [] },
+    { current: "p1_elite", prior: ["p1_start", "p1_upper_rest"] },
+    { current: "p1_boss", prior: ["p1_start", "p1_upper_rest", "p1_elite"] },
+    { current: "p2_entry_fight", prior: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss"] },
+    { current: "p2_mid_elite", prior: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss", "p2_entry_fight"] },
+    { current: "p2_boss", prior: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss", "p2_entry_fight", "p2_mid_elite"] }
+  ];
+  const fallbackEntry = fallbackPathByEnc[encMod] || fallbackPathByEnc[0];
+
+  const isValidNodeId = (id) => {
+    if (typeof id !== "string" || id.length === 0) return false;
+    if (typeof CAMPAIGN_ROUTE_NODES !== "undefined" && Array.isArray(CAMPAIGN_ROUTE_NODES)) {
+      return CAMPAIGN_ROUTE_NODES.some(n => n.id === id);
+    }
+    return true;
+  };
+
+  if (!rawRoute || typeof rawRoute !== "object" || Array.isArray(rawRoute)) {
+    const completed = inShop ? [...fallbackEntry.prior, fallbackEntry.current] : [...fallbackEntry.prior];
+    return {
+      loop: defaultLoop,
+      currentNodeId: fallbackEntry.current,
+      completedNodeIds: completed,
+      visitedNodeIds: [...fallbackEntry.prior, fallbackEntry.current],
+      pendingSelection: Boolean(inShop && encMod < encCount - 1),
+      lastActivitySummary: null
+    };
+  }
+
+  const currentNodeId = isValidNodeId(rawRoute.currentNodeId)
+    ? rawRoute.currentNodeId
+    : fallbackEntry.current;
+  const completedNodeIds = Array.isArray(rawRoute.completedNodeIds)
+    ? Array.from(new Set(rawRoute.completedNodeIds.filter(isValidNodeId)))
+    : [];
+  const visitedNodeIds = Array.isArray(rawRoute.visitedNodeIds)
+    ? Array.from(new Set(rawRoute.visitedNodeIds.filter(isValidNodeId)))
+    : [];
+  if (!visitedNodeIds.includes(currentNodeId)) {
+    visitedNodeIds.push(currentNodeId);
+  }
+  const rawLoop = Number(rawRoute.loop);
+  const loop = Number.isFinite(rawLoop) && rawLoop >= 0 ? Math.floor(rawLoop) : defaultLoop;
+
+  return {
+    loop,
+    currentNodeId,
+    completedNodeIds,
+    visitedNodeIds,
+    pendingSelection: Boolean(rawRoute.pendingSelection),
+    lastActivitySummary: typeof rawRoute.lastActivitySummary === "string" ? rawRoute.lastActivitySummary : null
+  };
+}
+
 function migrateSaveObject(candidate) {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return { ok: false, status: "invalid_type", error: "Save data must be a JSON object." };
@@ -196,6 +260,28 @@ function normalizeSaveObject(candidate) {
       }
     : null;
 
+  const route = normalizeRouteObject(raw.route, encounterIdx, inShop);
+
+  let pendingDraft = null;
+  if (raw.pendingDraft && typeof raw.pendingDraft === "object") {
+    const rawChoices = Array.isArray(raw.pendingDraft.choices)
+      ? raw.pendingDraft.choices
+      : (Array.isArray(raw.pendingDraft.cards) ? raw.pendingDraft.cards : []);
+    const validChoices = rawChoices
+      .map(item => (typeof item === "string" ? item : (item && item.id ? item.id : null)))
+      .filter(id => typeof id === "string" && id.length > 0 && (typeof CARD_DB === "undefined" || CARD_DB[id]));
+    if (validChoices.length > 0 || raw.pendingDraft.resolved) {
+      const encIdx = Number(raw.pendingDraft.encounterIdx);
+      pendingDraft = {
+        choices: validChoices,
+        encounterIdx: Number.isFinite(encIdx) && encIdx >= 0 ? Math.floor(encIdx) : encounterIdx,
+        resolved: Boolean(raw.pendingDraft.resolved),
+        skipped: Boolean(raw.pendingDraft.skipped),
+        selectedCardId: typeof raw.pendingDraft.selectedCardId === "string" ? raw.pendingDraft.selectedCardId : null
+      };
+    }
+  }
+
   const canonicalSave = {
     version: CANONICAL_SAVE_VERSION,
     savedAt: Number.isFinite(Number(raw.savedAt)) && Number(raw.savedAt) > 0 ? Number(raw.savedAt) : 0,
@@ -209,7 +295,9 @@ function normalizeSaveObject(candidate) {
     relics: relicIds.map(id => ({ id })),
     consumableIds,
     encounterState,
-    shopStock
+    shopStock,
+    route,
+    pendingDraft
   };
 
   const expectedChecksum = computeSaveChecksum(canonicalSave);
@@ -274,6 +362,12 @@ function compareSaveFreshness(candidateA, candidateB) {
   const turnB = Number(candidateB.encounterState?.turn) || 0;
   if (turnA !== turnB) {
     return turnA > turnB ? 1 : -1;
+  }
+
+  const draftPendingA = Boolean(candidateA.pendingDraft && !candidateA.pendingDraft.resolved);
+  const draftPendingB = Boolean(candidateB.pendingDraft && !candidateB.pendingDraft.resolved);
+  if (draftPendingA !== draftPendingB) {
+    return draftPendingA ? -1 : 1;
   }
 
   return 0;

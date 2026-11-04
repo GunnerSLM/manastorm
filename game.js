@@ -56,6 +56,8 @@ const state = {
   shopStock: { relics: [], cards: [], upgrades: [] },
   turnStats: { spells: 0, landfalls: 0, graveTriggers: 0 },
   synTiers: {},
+  route: null,
+  pendingDraft: null,
   lastSaveError: null
 };
 
@@ -133,6 +135,17 @@ function pushToGraveyard(card) {
   dispatchRelicEvent("onGraveyardEnter", { card });
 }
 
+function millCards(count) {
+  let milled = 0;
+  for (let i = 0; i < count; i++) {
+    if (state.library.length === 0) break;
+    const card = state.library.pop();
+    pushToGraveyard(card);
+    milled++;
+  }
+  return milled;
+}
+
 function cloneCard(cardId) {
   const base = CARD_DB[cardId];
   return {
@@ -176,6 +189,178 @@ function shuffle(arr) {
 }
 
 // === INITIALIZATION & RUN START ===
+function createInitialRouteState(loop = 0) {
+  const startNode = (typeof CAMPAIGN_ROUTE_NODES !== "undefined" && CAMPAIGN_ROUTE_NODES[0])
+    ? CAMPAIGN_ROUTE_NODES[0]
+    : { id: "p1_start" };
+  return {
+    loop: Math.max(0, Math.floor(Number(loop) || 0)),
+    currentNodeId: startNode.id,
+    completedNodeIds: [],
+    visitedNodeIds: [startNode.id],
+    pendingSelection: false,
+    lastActivitySummary: null
+  };
+}
+
+function getRouteNodeById(nodeId) {
+  if (!nodeId || typeof CAMPAIGN_ROUTE_NODES === "undefined" || !Array.isArray(CAMPAIGN_ROUTE_NODES)) {
+    return null;
+  }
+  return CAMPAIGN_ROUTE_NODES.find(n => n.id === nodeId) || null;
+}
+
+function ensureRouteState() {
+  if (!state.route || typeof state.route !== "object" || !getRouteNodeById(state.route.currentNodeId)) {
+    state.route = createInitialRouteState(Math.floor((Number(state.encounterIdx) || 0) / ENCOUNTERS.length));
+  }
+  if (!Array.isArray(state.route.completedNodeIds)) state.route.completedNodeIds = [];
+  if (!Array.isArray(state.route.visitedNodeIds)) state.route.visitedNodeIds = [state.route.currentNodeId];
+  return state.route;
+}
+
+function getCurrentRouteNode() {
+  const route = ensureRouteState();
+  return getRouteNodeById(route.currentNodeId) || (typeof CAMPAIGN_ROUTE_NODES !== "undefined" ? CAMPAIGN_ROUTE_NODES[0] : null);
+}
+
+function completeCurrentRouteNode() {
+  const route = ensureRouteState();
+  if (!route.completedNodeIds.includes(route.currentNodeId)) {
+    route.completedNodeIds.push(route.currentNodeId);
+    return true;
+  }
+  return false;
+}
+
+function getAvailableNextRouteNodes() {
+  const route = ensureRouteState();
+  const current = getCurrentRouteNode();
+  if (!current || !route.completedNodeIds.includes(current.id)) return [];
+  return (current.next || [])
+    .map(id => getRouteNodeById(id))
+    .filter(n => n && !route.completedNodeIds.includes(n.id));
+}
+
+function canSelectRouteNode(nodeId) {
+  if (!nodeId || state.runOver || state.combatLocked) return false;
+  const route = ensureRouteState();
+  const current = getCurrentRouteNode();
+  if (!current || !route.completedNodeIds.includes(current.id)) return false;
+  if (route.completedNodeIds.includes(nodeId)) return false;
+  return Array.isArray(current.next) && current.next.includes(nodeId) && Boolean(getRouteNodeById(nodeId));
+}
+
+function resolveNonCombatRouteNode(node) {
+  const route = ensureRouteState();
+  if (route.completedNodeIds.includes(node.id)) {
+    return { ok: false, reason: "already_completed" };
+  }
+
+  let healed = 0;
+  let goldEarned = 0;
+  let buffedCardName = null;
+  let scrollGrantedName = null;
+
+  if (node.healAmount) {
+    healed = gainLife(node.healAmount, node.title);
+  }
+  if (node.goldBonus) {
+    goldEarned = node.goldBonus;
+    state.gold += goldEarned;
+  }
+  if (node.buffBonus) {
+    const creatures = state.masterDeck.filter(c => c.type === "Creature");
+    if (creatures.length > 0) {
+      creatures.sort((a, b) => (b.power + (b.permPowerBonus || 0)) - (a.power + (a.permPowerBonus || 0)));
+      const target = creatures[0];
+      target.permPowerBonus = (target.permPowerBonus || 0) + node.buffBonus;
+      target.permToughnessBonus = (target.permToughnessBonus || 0) + node.buffBonus;
+      target.foil = target.foil || "Foil";
+      buffedCardName = target.name;
+    }
+  }
+  if (node.grantScroll) {
+    if (state.consumables.length < 2 && CONSUMABLE_DB.length > 0) {
+      const def = CONSUMABLE_DB[Math.floor(Math.random() * CONSUMABLE_DB.length)];
+      state.consumables.push({ ...def, uid: nextUid() });
+      scrollGrantedName = def.name;
+    } else {
+      state.gold += 3;
+      goldEarned += 3;
+    }
+  }
+
+  completeCurrentRouteNode();
+  route.pendingSelection = (node.next && node.next.length > 0);
+
+  const summaryParts = [];
+  if (healed > 0) summaryParts.push(`+${healed} Life`);
+  if (goldEarned > 0) summaryParts.push(`+$${goldEarned} Gold`);
+  if (buffedCardName) summaryParts.push(`${buffedCardName} +${node.buffBonus}/+${node.buffBonus} & Foil`);
+  if (scrollGrantedName) summaryParts.push(`Scroll: ${scrollGrantedName}`);
+  const summaryText = summaryParts.length > 0 ? summaryParts.join(" • ") : node.desc;
+  route.lastActivitySummary = `${node.title}: ${summaryText}`;
+
+  if (node.type === "shop") {
+    state.enemyLife = 0;
+    generateShopStock(false);
+    saveRunState(true);
+    renderShop();
+    renderAll();
+    if (!isHeadlessEnv()) {
+      setText("shop-plane-badge", `SANCTUM OUTPOST • ${node.title.toUpperCase()}`);
+      setText("shop-reward-summary", `${node.desc} (${summaryText})`);
+      safeShowModal("shop-dialog");
+    }
+  } else {
+    saveRunState(false);
+    renderAll();
+    setLog(`Visited ${node.title} (${summaryText})! Choose your next stop on the Planar Route.`);
+    spawnFx(`${node.title}: ${summaryText}`, "#26d07c");
+  }
+
+  return { ok: true, node, summaryText };
+}
+
+function selectRouteNode(nodeId) {
+  if (!canSelectRouteNode(nodeId)) return false;
+  const route = ensureRouteState();
+  const node = getRouteNodeById(nodeId);
+  if (!node) return false;
+
+  route.currentNodeId = node.id;
+  if (!route.visitedNodeIds.includes(node.id)) {
+    route.visitedNodeIds.push(node.id);
+  }
+  route.pendingSelection = false;
+
+  const loopOffset = (route.loop || 0) * ENCOUNTERS.length;
+  if (typeof node.encounterIdx === "number") {
+    state.encounterIdx = loopOffset + node.encounterIdx;
+  }
+
+  if (node.type === "fight" || node.type === "elite" || node.type === "boss") {
+    route.lastActivitySummary = null;
+    beginEncounter();
+    saveRunState(false);
+    return true;
+  }
+
+  resolveNonCombatRouteNode(node);
+  return true;
+}
+
+function advanceToNextLoopRoute() {
+  const currentLoop = state.route && typeof state.route.loop === "number"
+    ? state.route.loop + 1
+    : Math.floor(state.encounterIdx / ENCOUNTERS.length) + 1;
+  state.route = createInitialRouteState(currentLoop);
+  state.encounterIdx = currentLoop * ENCOUNTERS.length;
+  beginEncounter();
+  saveRunState(false);
+}
+
 function startNewRun(deckConfig = STARTER_DECKS[0]) {
   state.runOver = false;
   state.combatLocked = false;
@@ -190,6 +375,8 @@ function startNewRun(deckConfig = STARTER_DECKS[0]) {
   state.playerLife = START_LIFE;
   state.gold = 6;
   state.synTiers = {};
+  state.route = createInitialRouteState(0);
+  state.pendingDraft = null;
 
   beginEncounter();
   saveRunState(false);
@@ -202,6 +389,7 @@ function getCurrentEncounter() {
 function beginEncounter() {
   state.runOver = false;
   state.combatLocked = false;
+  state.pendingDraft = null;
   const enc = getCurrentEncounter();
   const loopScale = Math.pow(2.5, Math.floor(state.encounterIdx / ENCOUNTERS.length));
   state.enemyMaxLife = Math.round(enc.maxLife * loopScale);
@@ -279,6 +467,15 @@ function startPlayerTurn(isFirstTurn = false, prefixLog = "") {
       drawCards(1 * stackCount);
       addResonance(1 * stackCount, "Esper Sentinel");
       spawnFx(`Esper Sentinel: +${stackCount} Card & +${stackCount} Mult!`, "#ffe299");
+    }
+    if (c.upkeep === "overseer") {
+      const buff = 1 * stackCount * getTokenMultiplier();
+      state.playerCreatures.forEach(ally => {
+        ally.power += buff;
+        ally.toughness += buff;
+      });
+      addResonance(1 * stackCount, "Steel Overseer");
+      spawnFx(`Steel Overseer: Board +${buff}/+${buff} & +${stackCount} Mult!`, "#a4b0be");
     }
   });
   dispatchRelicEvent("onTurnStart", { isFirstTurn });
@@ -495,11 +692,14 @@ function spawnTokens(name, power, toughness, color, keywords, baseCount) {
     existing.count += finalCount;
     existing.rules = `Token Stack (${existing.count}x).`;
   } else {
+    const tokenSubtype = name.includes("Goblin")
+      ? "Goblin"
+      : ((color === "C" || name.includes("Construct") || name.includes("Thopter") || name.includes("Myr")) ? "Construct" : "Token");
     state.playerCreatures.push({
       uid: nextUid(),
       name,
       color,
-      subtype: name.includes("Goblin") ? "Goblin" : "Token",
+      subtype: tokenSubtype,
       power,
       toughness,
       tempPower: 0,
@@ -627,6 +827,68 @@ const ETB_EFFECTS = {
       `,
       resolveReturn
     );
+  },
+  supplier() {
+    const milled = millCards(3);
+    addResonance(1, "Stitcher's Supplier");
+    spawnFx(`Stitcher's Supplier: Milled ${milled} & +1 Mult!`, "#9b59b6");
+  },
+  wayfinder() {
+    const milled = millCards(3);
+    addResonance(1, "Satyr Wayfinder");
+    let landIdx = -1;
+    for (let i = state.graveyard.length - 1; i >= 0; i--) {
+      if (state.graveyard[i].type === "Land") {
+        landIdx = i;
+        if (state.graveyard[i].isFetch || (state.graveyard[i].produces && state.graveyard[i].produces.length > 1)) {
+          break;
+        }
+      }
+    }
+    if (landIdx !== -1) {
+      const [recoveredLand] = state.graveyard.splice(landIdx, 1);
+      state.hand.push(recoveredLand);
+      spawnFx(`Wayfinder: Milled ${milled} & Recovered ${recoveredLand.name}!`, "#2ecc71");
+    } else {
+      spawnFx(`Satyr Wayfinder: Milled ${milled} & +1 Mult!`, "#2ecc71");
+    }
+  },
+  fiend_artisan(creature) {
+    const gyCreatures = state.graveyard.filter(c => c.type === "Creature").length;
+    const bonus = gyCreatures * getTokenMultiplier();
+    if (creature && bonus > 0) {
+      creature.power += bonus;
+      creature.toughness += bonus;
+    }
+    addResonance(1, "Fiend Artisan");
+    spawnFx(`Fiend Artisan: +${bonus}/+${bonus} Undergrowth & +1 Mult!`, "#2ecc71");
+  },
+  overseer() {
+    const buff = 1 * getTokenMultiplier();
+    state.playerCreatures.forEach(c => {
+      c.power += buff;
+      c.toughness += buff;
+    });
+    addResonance(1, "Steel Overseer");
+    spawnFx(`Steel Overseer: Board +${buff}/+${buff} & +1 Mult!`, "#a4b0be");
+  },
+  modular(creature) {
+    const otherUnits = state.playerCreatures.reduce((sum, c) => {
+      if (creature && c.uid === creature.uid) return sum;
+      return sum + (c.count || 1);
+    }, 0);
+    const bonus = otherUnits * getTokenMultiplier();
+    if (creature && bonus > 0) {
+      creature.power += bonus;
+      creature.toughness += bonus;
+    }
+    addResonance(1, "Arcbound Ravager");
+    spawnFx(`Arcbound Ravager: +${bonus}/+${bonus} Modular & +1 Mult!`, "#a4b0be");
+  },
+  battlesphere() {
+    spawnTokens("Myr Construct", 1, 1, "C", ["Haste"], 3);
+    addResonance(2, "Myr Battlesphere");
+    spawnFx("Myr Battlesphere: +3 Myr Constructs & +2 Mult!", "#a4b0be");
   }
 };
 
@@ -895,6 +1157,83 @@ const SPELL_EFFECTS = {
     state.manaPool.ANY += 1;
     addResonance(1, "Expressive Iteration");
     spawnFx("Drew 2 Cards, +1 Treasure & +1 Mult!", "#3498db");
+  },
+  grisly_salvage() {
+    const milled = millCards(3);
+    addResonance(2, "Grisly Salvage");
+    const gyCreatures = state.graveyard.filter(c => c.type === "Creature");
+    if (gyCreatures.length > 0) {
+      gyCreatures.sort(
+        (a, b) => ((b.power || 0) + (b.permPowerBonus || 0)) - ((a.power || 0) + (a.permPowerBonus || 0))
+      );
+      const best = gyCreatures[0];
+      state.graveyard = state.graveyard.filter(c => c.uid !== best.uid);
+      state.hand.push(best);
+      spawnFx(`Grisly Salvage: Milled ${milled} & Recovered ${best.name}!`, "#2ecc71");
+    } else {
+      drawCards(1);
+      spawnFx(`Grisly Salvage: Milled ${milled}, Drew 1 & +2 Mult!`, "#2ecc71");
+    }
+  },
+  spider_spawning() {
+    const gyCreatures = state.graveyard.filter(c => c.type === "Creature").length;
+    const count = Math.min(5, Math.max(2, gyCreatures));
+    spawnTokens("Spider Token", 2, 2, "G", ["Haste", "Lifelink"], count);
+    addResonance(2, "Spider Spawning");
+    spawnFx(`Spider Spawning: +${count * getTokenMultiplier()} Spiders & +2 Mult!`, "#2ecc71");
+  },
+  thoughtcast() {
+    drawCards(2);
+    addResonance(1, "Thoughtcast");
+    spawnFx("Thoughtcast: Drew 2 Cards & +1 Mult!", "#a4b0be");
+  },
+  thopter_foundry() {
+    spawnTokens("Thopter Construct", 1, 1, "C", ["Flying", "Haste"], 2);
+    gainLife(2, "Thopter Foundry");
+    addResonance(1, "Thopter Foundry");
+    spawnFx("Thopter Foundry: +2 Thopters, +2 Life & +1 Mult!", "#a4b0be");
+  },
+  galvanic_blast() {
+    addResonance(1, "Galvanic Blast");
+    if (state.enemyCreatures.length > 0) {
+      const sortedBlockers = [...state.enemyCreatures].sort((a, b) => b.power - a.power);
+      openTargetPickerModal(
+        "Galvanic Blast — Choose Target Blocker",
+        "Select an Enemy Blocker to destroy (+1 Resonance granted):",
+        sortedBlockers,
+        (ec, i) => `
+          <button type="button" class="board-card card-color-${ec.color}" data-target-idx="${i}">
+            <div class="card-top-bar"><span class="card-title">${ec.name}</span></div>
+            <div class="card-keywords">${ec.keywords.map(k => `<span class="kw-tag">${k}</span>`).join("")}</div>
+            <div class="card-rules">Destroy this ${ec.power}/${ec.toughness} Blocker.</div>
+            <div class="card-bottom-bar">
+              <span class="status-pill status-attack">${i === 0 ? "★ Recommended" : "Target"}</span>
+              <span class="pt-box">${ec.power}/${ec.toughness}</span>
+            </div>
+          </button>
+        `,
+        (chosen) => {
+          state.enemyCreatures = state.enemyCreatures.filter(b => b.uid !== chosen.uid);
+          spawnFx(`Galvanic Blast Destroyed ${chosen.name}!`, "#ff4757");
+        }
+      );
+    } else {
+      addBurnPower(5, "Galvanic Blast");
+      spawnFx("Galvanic Blast: +5 Burn to Boss & +1 Mult!", "#ff4757");
+    }
+  },
+  cyberdrive() {
+    const buff = 3 * getTokenMultiplier();
+    state.playerCreatures.forEach(c => {
+      c.tempPower += buff;
+      c.tempToughness += buff;
+      addTempKeyword(c, "Flying");
+      addTempKeyword(c, "Haste");
+      c.summoningSick = false;
+      c.attacking = true;
+    });
+    addResonance(2, "Cyberdrive Awakener");
+    spawnFx(`CYBERDRIVE! All Creatures +${buff}/+${buff}, Flying & Haste!`, "#a4b0be");
   }
 };
 
@@ -960,14 +1299,185 @@ function useMulligan() {
 // === VICTORY, DEFEAT & COLOR-WEIGHTED SHOP SYSTEM ===
 function getDeckColors() {
   const cols = new Set(state.deckArchetype && state.deckArchetype.colors ? state.deckArchetype.colors : []);
-  state.masterDeck.forEach(c => {
+  (state.masterDeck || []).forEach(c => {
+    if (!c) return;
     if (c.type === "Land") {
       (c.produces || []).forEach(col => cols.add(col));
-    } else if (COLORS.includes(c.color)) {
-      cols.add(c.color);
+    } else {
+      if (COLORS.includes(c.color) || c.color === "C") {
+        cols.add(c.color);
+      }
+      if (c.manaCost && typeof parseManaCost === "function") {
+        const parsed = parseManaCost(c.manaCost);
+        if (parsed && parsed.pips) {
+          COLORS.forEach(col => {
+            if ((parsed.pips[col] || 0) > 0) cols.add(col);
+          });
+        }
+      }
     }
   });
   return cols;
+}
+
+function isCardLegalForDeck(cardOrId, deckColors) {
+  const card = typeof cardOrId === "string" ? (typeof CARD_DB !== "undefined" ? CARD_DB[cardOrId] : null) : cardOrId;
+  if (!card || typeof card !== "object") return false;
+
+  // 1. Basic lands strictly excluded
+  if (card.subtype === "Basic") return false;
+
+  const colorsSet = deckColors instanceof Set
+    ? deckColors
+    : new Set(Array.isArray(deckColors) ? deckColors : []);
+
+  // 2. Fetch lands are universal fixers legal for all decks
+  if (card.isFetch) return true;
+
+  // 3. Dual lands / non-fetch lands
+  if (card.type === "Land") {
+    const produces = Array.isArray(card.produces) ? card.produces : [];
+    if (produces.length === 0) return true;
+    return produces.every(col => colorsSet.has(col));
+  }
+
+  // 4. Colorless cards (e.g. Artifact Constructs)
+  if (card.color === "C") {
+    return colorsSet.has("C");
+  }
+
+  // 5. Colored cards: primary color and all colored mana pips must match deckColors
+  if (!colorsSet.has(card.color)) {
+    return false;
+  }
+
+  if (card.manaCost && typeof parseManaCost === "function") {
+    const parsed = parseManaCost(card.manaCost);
+    if (parsed && parsed.pips) {
+      for (const col of COLORS) {
+        if ((parsed.pips[col] || 0) > 0 && !colorsSet.has(col)) {
+          return false;
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+function sampleDraftPool(deckColors, count = 3, rng = Math.random) {
+  if (typeof CARD_DB === "undefined") return [];
+  const colorsSet = deckColors instanceof Set
+    ? deckColors
+    : new Set(Array.isArray(deckColors) ? deckColors : []);
+
+  const eligible = Object.values(CARD_DB).filter(c => isCardLegalForDeck(c, colorsSet));
+  if (eligible.length === 0) return [];
+
+  const needed = Math.min(count, eligible.length);
+  const pool = [...eligible];
+  const chosen = [];
+
+  for (let i = 0; i < needed && pool.length > 0; i++) {
+    const rawR = typeof rng === "function" ? rng() : Math.random();
+    const safeR = Number.isFinite(rawR) ? Math.abs(rawR) : 0;
+    const idx = Math.floor(safeR * pool.length) % pool.length;
+    chosen.push(pool[idx]);
+    pool.splice(idx, 1);
+  }
+
+  return chosen;
+}
+
+const generateDraftRewardPool = sampleDraftPool;
+
+function selectDraftCard(choiceIdx) {
+  if (!state.pendingDraft || state.pendingDraft.resolved || state.runOver) {
+    return false;
+  }
+  const choices = state.pendingDraft.choices;
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return false;
+  }
+
+  let targetId = null;
+  if (typeof choiceIdx === "number") {
+    if (choiceIdx < 0 || choiceIdx >= choices.length) return false;
+    const item = choices[choiceIdx];
+    targetId = typeof item === "string" ? item : (item && item.id ? item.id : null);
+  } else if (typeof choiceIdx === "string") {
+    const found = choices.find(c => (typeof c === "string" ? c : c?.id) === choiceIdx);
+    if (!found) return false;
+    targetId = choiceIdx;
+  }
+  if (!targetId || !CARD_DB[targetId]) return false;
+
+  const draftedCard = cloneCard(targetId);
+  state.masterDeck.push(draftedCard);
+
+  state.pendingDraft.resolved = true;
+  state.pendingDraft.skipped = false;
+  state.pendingDraft.selectedCardId = targetId;
+
+  saveRunState(true);
+
+  if (!isHeadlessEnv()) {
+    if (typeof spawnFx === "function") {
+      spawnFx(`Drafted ${draftedCard.name}!`, "#26d07c");
+    }
+    if (typeof setLog === "function") {
+      setLog(`Post-battle draft: drafted ${draftedCard.name} into master deck (${state.masterDeck.length} cards).`);
+    }
+    if (typeof closeDraftModal === "function") {
+      closeDraftModal();
+    }
+    if (typeof renderAll === "function") {
+      renderAll();
+    }
+    if (typeof renderShop === "function") {
+      renderShop();
+    }
+    if (typeof safeShowModal === "function") {
+      safeShowModal("shop-dialog");
+    }
+  }
+  return true;
+}
+
+function skipDraft() {
+  if (!state.pendingDraft || state.pendingDraft.resolved || state.runOver) {
+    return false;
+  }
+
+  state.gold += 2;
+
+  state.pendingDraft.resolved = true;
+  state.pendingDraft.skipped = true;
+  state.pendingDraft.selectedCardId = null;
+
+  saveRunState(true);
+
+  if (!isHeadlessEnv()) {
+    if (typeof spawnFx === "function") {
+      spawnFx("Draft Skipped: +$2 Gold!", "#ffd466");
+    }
+    if (typeof setLog === "function") {
+      setLog(`Post-battle draft skipped: received +$2 Gold compensation bounty (Current Gold: $${state.gold}).`);
+    }
+    if (typeof closeDraftModal === "function") {
+      closeDraftModal();
+    }
+    if (typeof renderAll === "function") {
+      renderAll();
+    }
+    if (typeof renderShop === "function") {
+      renderShop();
+    }
+    if (typeof safeShowModal === "function") {
+      safeShowModal("shop-dialog");
+    }
+  }
+  return true;
 }
 
 function canSafelyThinBasics() {
@@ -996,15 +1506,45 @@ function handleEncounterVictory() {
   // Between-encounter victory recovery (Step 1)
   const healed = gainLife(VICTORY_HEAL, "Victory Recovery");
 
+  // Mark current route node as completed and flag pending route choice if branches remain
+  const route = ensureRouteState();
+  completeCurrentRouteNode();
+  const nextNodes = getAvailableNextRouteNodes();
+  route.pendingSelection = nextNodes.length > 0;
+  route.lastActivitySummary = `Defeated ${enc.name} (+$${earned} Gold${healed > 0 ? `, +${healed} Life` : ""})`;
+
   generateShopStock(false);
-  saveRunState(true);
+
+  const isFinalEncounter = state.encounterIdx >= ENCOUNTERS.length - 1;
+  if (!isFinalEncounter) {
+    const draftCards = sampleDraftPool(getDeckColors(), 3);
+    state.pendingDraft = {
+      choices: draftCards.map(c => c.id),
+      encounterIdx: state.encounterIdx,
+      resolved: false,
+      skipped: false,
+      selectedCardId: null
+    };
+    Object.defineProperty(state.pendingDraft, "cards", {
+      get() {
+        return (this.choices || []).map(id => (typeof id === "string" ? CARD_DB[id] : id)).filter(Boolean);
+      },
+      enumerable: false,
+      configurable: true
+    });
+    saveRunState(false);
+  } else {
+    state.pendingDraft = null;
+    saveRunState(true);
+  }
+
   renderShop();
   renderAll();
 
   if (!isHeadlessEnv()) {
     const badgeText = `VICTORY • ${enc.name.toUpperCase()} DEFEATED!`;
     const summaryText =
-      `Earned $${enc.reward} Ward Bounty + $${unusedTurnsBonus} Unused Turn Bonus + $${interest} Interest ($${earned} Total)${healed > 0 ? ` • Restored +${healed} Life` : ""}. Sculpt your deck before the next encounter!`;
+      `Earned $${enc.reward} Ward Bounty + $${unusedTurnsBonus} Unused Turn Bonus + $${interest} Interest ($${earned} Total)${healed > 0 ? ` • Restored +${healed} Life` : ""}. Sculpt your deck before choosing your next Planar Route stop!`;
     if (typeof presentVictoryOrShopModal === "function") {
       presentVictoryOrShopModal(enc, earned, healed, badgeText, summaryText);
     }
@@ -1051,17 +1591,23 @@ function generateShopStock(preserveUpgrades = false) {
     const c = CARD_DB[id];
     if (c.isFetch) {
       inColorPool.push({ id, weight: 4 });
-    } else if (c.type === "Land" && c.produces.length > 1) {
-      const matchCount = c.produces.filter(col => deckColors.has(col)).length;
-      if (matchCount === 2) {
+    } else if (c.type === "Land") {
+      const matchCount = (c.produces || []).filter(col => deckColors.has(col)).length;
+      if (matchCount >= 2 || (c.produces.length === 1 && matchCount === 1)) {
         inColorPool.push({ id, weight: 6 });
       } else if (matchCount === 1) {
+        splashPool.push({ id, weight: 2 });
+      }
+    } else if (c.color === "C") {
+      if (deckColors.has("C")) {
+        inColorPool.push({ id, weight: 6 });
+      } else {
         splashPool.push({ id, weight: 2 });
       }
     } else {
       const parsed = parseManaCost(c.manaCost);
       const cardCols = COLORS.filter(col => parsed.pips[col] > 0);
-      const allMatch = cardCols.every(col => deckColors.has(col));
+      const allMatch = cardCols.length > 0 && cardCols.every(col => deckColors.has(col));
       const someMatch = cardCols.some(col => deckColors.has(col));
       if (allMatch) {
         inColorPool.push({ id, weight: 6 });
@@ -1400,6 +1946,73 @@ function isValidEncounterSnapshot(snapshot) {
   return true;
 }
 
+function normalizeRouteState(rawRoute, encounterIdx = 0, inShop = false) {
+  if (typeof normalizeRouteObject === "function") {
+    return normalizeRouteObject(rawRoute, encounterIdx, inShop);
+  }
+  const encCount =
+    typeof ENCOUNTERS !== "undefined" && Array.isArray(ENCOUNTERS) && ENCOUNTERS.length > 0
+      ? ENCOUNTERS.length
+      : 6;
+  const safeEncIdx = Math.max(0, Math.floor(Number(encounterIdx) || 0));
+  const defaultLoop = Math.floor(safeEncIdx / encCount);
+  const encMod = safeEncIdx % encCount;
+
+  const fallbackPathByEnc = [
+    { current: "p1_start", prior: [] },
+    { current: "p1_elite", prior: ["p1_start", "p1_upper_rest"] },
+    { current: "p1_boss", prior: ["p1_start", "p1_upper_rest", "p1_elite"] },
+    { current: "p2_entry_fight", prior: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss"] },
+    { current: "p2_mid_elite", prior: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss", "p2_entry_fight"] },
+    { current: "p2_boss", prior: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss", "p2_entry_fight", "p2_mid_elite"] }
+  ];
+  const fallbackEntry = fallbackPathByEnc[encMod] || fallbackPathByEnc[0];
+
+  const isValidNodeId = (id) => {
+    if (typeof id !== "string" || id.length === 0) return false;
+    if (typeof CAMPAIGN_ROUTE_NODES !== "undefined" && Array.isArray(CAMPAIGN_ROUTE_NODES)) {
+      return CAMPAIGN_ROUTE_NODES.some(n => n.id === id);
+    }
+    return true;
+  };
+
+  if (!rawRoute || typeof rawRoute !== "object" || Array.isArray(rawRoute)) {
+    const completed = inShop ? [...fallbackEntry.prior, fallbackEntry.current] : [...fallbackEntry.prior];
+    return {
+      loop: defaultLoop,
+      currentNodeId: fallbackEntry.current,
+      completedNodeIds: completed,
+      visitedNodeIds: [...fallbackEntry.prior, fallbackEntry.current],
+      pendingSelection: Boolean(inShop && encMod < encCount - 1),
+      lastActivitySummary: null
+    };
+  }
+
+  const currentNodeId = isValidNodeId(rawRoute.currentNodeId)
+    ? rawRoute.currentNodeId
+    : fallbackEntry.current;
+  const completedNodeIds = Array.isArray(rawRoute.completedNodeIds)
+    ? Array.from(new Set(rawRoute.completedNodeIds.filter(isValidNodeId)))
+    : [];
+  const visitedNodeIds = Array.isArray(rawRoute.visitedNodeIds)
+    ? Array.from(new Set(rawRoute.visitedNodeIds.filter(isValidNodeId)))
+    : [];
+  if (!visitedNodeIds.includes(currentNodeId)) {
+    visitedNodeIds.push(currentNodeId);
+  }
+  const rawLoop = Number(rawRoute.loop);
+  const loop = Number.isFinite(rawLoop) && rawLoop >= 0 ? Math.floor(rawLoop) : defaultLoop;
+
+  return {
+    loop,
+    currentNodeId,
+    completedNodeIds,
+    visitedNodeIds,
+    pendingSelection: Boolean(rawRoute.pendingSelection),
+    lastActivitySummary: typeof rawRoute.lastActivitySummary === "string" ? rawRoute.lastActivitySummary : null
+  };
+}
+
 function normalizeCanonicalSave(candidate) {
   if (typeof DesktopBridge !== "undefined" && typeof DesktopBridge.normalizeSaveObject === "function") {
     return DesktopBridge.normalizeSaveObject(candidate);
@@ -1459,12 +2072,13 @@ function normalizeCanonicalSave(candidate) {
       : []);
   const matchedArch = STARTER_DECKS.find(d => d.id === working.archetypeId) || STARTER_DECKS[0];
   const inShop = Boolean(working.inShop);
+  const safeEncIdx = Math.max(0, Math.floor(Number(working.encounterIdx) || 0));
   const canonicalSave = {
     version: 1,
     savedAt: Number.isFinite(Number(working.savedAt)) && Number(working.savedAt) > 0 ? Number(working.savedAt) : 0,
     inShop,
     archetypeId: matchedArch ? matchedArch.id : String(working.archetypeId || STARTER_DECKS[0].id),
-    encounterIdx: Math.max(0, Math.floor(Number(working.encounterIdx) || 0)),
+    encounterIdx: safeEncIdx,
     playerLife: Math.min(MAX_LIFE, Math.max(1, Math.round(Number(working.playerLife) || START_LIFE))),
     gold: Math.max(0, Math.floor(Number(working.gold) || 0)),
     masterDeck: normalizedDeck,
@@ -1478,8 +2092,30 @@ function normalizeCanonicalSave(candidate) {
           cards: Array.isArray(working.shopStock.cards) ? working.shopStock.cards : [],
           upgrades: Array.isArray(working.shopStock.upgrades) ? working.shopStock.upgrades : []
         }
-      : null
+      : null,
+    route: normalizeRouteState(working.route, safeEncIdx, inShop)
   };
+
+  let pendingDraft = null;
+  if (working.pendingDraft && typeof working.pendingDraft === "object") {
+    const rawChoices = Array.isArray(working.pendingDraft.choices)
+      ? working.pendingDraft.choices
+      : (Array.isArray(working.pendingDraft.cards) ? working.pendingDraft.cards : []);
+    const validChoices = rawChoices
+      .map(item => (typeof item === "string" ? item : (item && item.id ? item.id : null)))
+      .filter(id => typeof id === "string" && id.length > 0 && (typeof CARD_DB === "undefined" || CARD_DB[id]));
+    if (validChoices.length > 0 || working.pendingDraft.resolved) {
+      const encIdx = Number(working.pendingDraft.encounterIdx);
+      pendingDraft = {
+        choices: validChoices,
+        encounterIdx: Number.isFinite(encIdx) && encIdx >= 0 ? Math.floor(encIdx) : safeEncIdx,
+        resolved: Boolean(working.pendingDraft.resolved),
+        skipped: Boolean(working.pendingDraft.skipped),
+        selectedCardId: typeof working.pendingDraft.selectedCardId === "string" ? working.pendingDraft.selectedCardId : null
+      };
+    }
+  }
+  canonicalSave.pendingDraft = pendingDraft;
   const expectedChecksum = fallbackComputeSaveChecksum(canonicalSave);
   if (typeof working.saveIntegrity === "string" && working.saveIntegrity.length > 0) {
     const rawChecksum = fallbackComputeSaveChecksum(working);
@@ -1581,7 +2217,9 @@ function createFullRunSnapshot() {
     encounterIdx: state.encounterIdx,
     playerLife: state.playerLife,
     gold: state.gold,
+    route: deepCloneSaveData(ensureRouteState()),
     shopStock: deepCloneSaveData(state.shopStock),
+    pendingDraft: state.pendingDraft ? deepCloneSaveData(state.pendingDraft) : null,
     encounterState: createEncounterSaveSnapshot()
   };
 }
@@ -1598,7 +2236,18 @@ function restoreFullRunSnapshot(fullSnapshot) {
   state.encounterIdx = Number(fullSnapshot.encounterIdx) || 0;
   state.playerLife = Number(fullSnapshot.playerLife) || START_LIFE;
   state.gold = Number(fullSnapshot.gold) || 0;
+  state.route = normalizeRouteState(fullSnapshot.route, state.encounterIdx, false);
   state.shopStock = deepCloneSaveData(fullSnapshot.shopStock || { relics: [], cards: [], upgrades: [] });
+  state.pendingDraft = fullSnapshot.pendingDraft ? deepCloneSaveData(fullSnapshot.pendingDraft) : null;
+  if (state.pendingDraft && typeof state.pendingDraft === "object") {
+    Object.defineProperty(state.pendingDraft, "cards", {
+      get() {
+        return (this.choices || []).map(id => (typeof id === "string" ? CARD_DB[id] : id)).filter(Boolean);
+      },
+      enumerable: false,
+      configurable: true
+    });
+  }
   if (fullSnapshot.encounterState) {
     restoreEncounterSaveSnapshot(fullSnapshot.encounterState);
   }
@@ -1626,7 +2275,17 @@ function createCanonicalSavePayload(inShop = false) {
     relics: state.relics.map(r => ({ id: r.id })),
     consumableIds: state.consumables.map(s => s.id),
     encounterState: inShop ? null : createEncounterSaveSnapshot(),
-    shopStock: inShop ? deepCloneSaveData(state.shopStock) : null
+    shopStock: inShop ? deepCloneSaveData(state.shopStock) : null,
+    route: deepCloneSaveData(ensureRouteState()),
+    pendingDraft: state.pendingDraft ? {
+      choices: Array.isArray(state.pendingDraft.choices)
+        ? [...state.pendingDraft.choices]
+        : (Array.isArray(state.pendingDraft.cards) ? state.pendingDraft.cards.map(c => (typeof c === "string" ? c : c?.id)).filter(Boolean) : []),
+      encounterIdx: Number(state.pendingDraft.encounterIdx) || state.encounterIdx,
+      resolved: Boolean(state.pendingDraft.resolved),
+      skipped: Boolean(state.pendingDraft.skipped),
+      selectedCardId: state.pendingDraft.selectedCardId || null
+    } : null
   };
   const check = normalizeCanonicalSave(rawPayload);
   return check.valid ? check.save : rawPayload;
@@ -1685,6 +2344,32 @@ function applyCanonicalSaveToState(saved, recoveredFromBackup = false) {
   state.gold = Math.max(0, Number(saved.gold) || 0);
   state.runOver = false;
   state.combatLocked = false;
+  state.route = normalizeRouteState(saved.route, state.encounterIdx, saved.inShop);
+
+  if (saved.pendingDraft && typeof saved.pendingDraft === "object") {
+    const rawChoices = Array.isArray(saved.pendingDraft.choices)
+      ? saved.pendingDraft.choices
+      : (Array.isArray(saved.pendingDraft.cards) ? saved.pendingDraft.cards : []);
+    const validChoices = rawChoices
+      .map(item => (typeof item === "string" ? item : (item && item.id ? item.id : null)))
+      .filter(id => typeof id === "string" && id.length > 0 && (typeof CARD_DB === "undefined" || CARD_DB[id]));
+    state.pendingDraft = {
+      choices: validChoices,
+      encounterIdx: Number.isFinite(Number(saved.pendingDraft.encounterIdx)) ? Math.floor(Number(saved.pendingDraft.encounterIdx)) : state.encounterIdx,
+      resolved: Boolean(saved.pendingDraft.resolved),
+      skipped: Boolean(saved.pendingDraft.skipped),
+      selectedCardId: typeof saved.pendingDraft.selectedCardId === "string" ? saved.pendingDraft.selectedCardId : null
+    };
+    Object.defineProperty(state.pendingDraft, "cards", {
+      get() {
+        return (this.choices || []).map(id => (typeof id === "string" ? CARD_DB[id] : id)).filter(Boolean);
+      },
+      enumerable: false,
+      configurable: true
+    });
+  } else {
+    state.pendingDraft = null;
+  }
 
   state.masterDeck = saved.masterDeck
     .filter(sc => CARD_DB[sc.id])
@@ -1718,6 +2403,14 @@ function applyCanonicalSaveToState(saved, recoveredFromBackup = false) {
     .map(s => ({ ...s, uid: nextUid() }));
 
   if (!saved.inShop) {
+    if (state.pendingDraft && !state.pendingDraft.resolved) {
+      state.enemyLife = 0;
+      renderAll();
+      if (!isHeadlessEnv() && typeof openDraftModal === "function") {
+        openDraftModal(getCurrentEncounter());
+      }
+      return true;
+    }
     if (!restoreEncounterSaveSnapshot(saved.encounterState)) {
       if (saved.encounterState) {
         console.warn("[MANASTORM Save] Encounter snapshot incomplete; restarting encounter with saved deck/relics.");
@@ -1752,7 +2445,11 @@ function applyCanonicalSaveToState(saved, recoveredFromBackup = false) {
     const enc = getCurrentEncounter();
     renderShop();
     renderAll();
-    if (typeof openRestoredShopModal === "function") {
+    if (state.pendingDraft && !state.pendingDraft.resolved) {
+      if (typeof openDraftModal === "function") {
+        openDraftModal(enc);
+      }
+    } else if (typeof openRestoredShopModal === "function") {
       openRestoredShopModal(enc);
     }
     saveRunState(true);
@@ -1762,6 +2459,9 @@ function applyCanonicalSaveToState(saved, recoveredFromBackup = false) {
   const prefix = recoveredFromBackup ? "⚠️ Recovered from backup save: " : "";
   setLog(`${prefix}Restored saved run (${arch.badge}, Encounter ${state.encounterIdx + 1})!`);
   renderAll();
+  if (!isHeadlessEnv() && state.route && state.route.pendingSelection && typeof openRouteModal === "function") {
+    openRouteModal(true);
+  }
   return true;
 }
 
@@ -1874,6 +2574,11 @@ function loadRunState(options = {}) {
 
 const GameState = {
   getState: () => state,
+  ensureRouteState,
+  getCurrentRouteNode,
+  getAvailableNextRouteNodes,
+  canSelectRouteNode,
+  selectRouteNode,
   createEncounterSaveSnapshot,
   restoreEncounterSaveSnapshot,
   createFullRunSnapshot,
@@ -1882,7 +2587,12 @@ const GameState = {
   normalizeCanonicalSave,
   saveRunState,
   loadRunState,
-  clearRunState
+  clearRunState,
+  isCardLegalForDeck,
+  sampleDraftPool,
+  generateDraftRewardPool,
+  selectDraftCard,
+  skipDraft
 };
 
 if (typeof globalThis !== "undefined") {
@@ -1891,6 +2601,11 @@ if (typeof globalThis !== "undefined") {
   globalThis.createCanonicalSavePayload = createCanonicalSavePayload;
   globalThis.createFullRunSnapshot = createFullRunSnapshot;
   globalThis.restoreFullRunSnapshot = restoreFullRunSnapshot;
+  globalThis.isCardLegalForDeck = isCardLegalForDeck;
+  globalThis.sampleDraftPool = sampleDraftPool;
+  globalThis.generateDraftRewardPool = generateDraftRewardPool;
+  globalThis.selectDraftCard = selectDraftCard;
+  globalThis.skipDraft = skipDraft;
   if (!globalThis.SAVE_BACKUP_KEY) globalThis.SAVE_BACKUP_KEY = SAVE_BACKUP_STORE_KEY;
   if (!globalThis.SAVE_CORRUPT_KEY) globalThis.SAVE_CORRUPT_KEY = SAVE_CORRUPT_STORE_KEY;
 }

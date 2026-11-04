@@ -72,6 +72,11 @@ const CARD_DB = {
     manaCost: "", produces: ["W", "U"],
     rules: "Dual Land — Tap: Add {W} or {U}."
   },
+  wastes: {
+    id: "wastes", name: "Wastes", type: "Land", subtype: "Basic", color: "C",
+    manaCost: "", produces: ["C"],
+    rules: "Tap: Add {C} to your mana pool."
+  },
   evolving_wilds: {
     id: "evolving_wilds", name: "Evolving Wilds (Fetch)", type: "Land", subtype: "Fetch", color: "L",
     manaCost: "", produces: [], isFetch: true,
@@ -312,6 +317,101 @@ const CARD_DB = {
     power: 6, toughness: 6, keywords: ["Trample", "Haste"],
     etb: "sun_titan",
     rules: "Trample, Haste. ETB: Return a Creature or Land from your Graveyard to the Battlefield and gain +2 Resonance!"
+  },
+
+  // === GOLGARI GRAVEYARD & UNDERGROWTH CARDS ({B}/{G}) ===
+  stitchers_supplier: {
+    id: "stitchers_supplier", name: "Stitcher's Supplier", type: "Creature", subtype: "Zombie", color: "B",
+    manaCost: "{B}",
+    power: 1, toughness: 1, keywords: ["Haste", "Dredge"],
+    etb: "supplier",
+    rules: "Haste. ETB: Mill 3 cards from your Library into your Graveyard and gain +1 Resonance!"
+  },
+  satyr_wayfinder: {
+    id: "satyr_wayfinder", name: "Satyr Wayfinder", type: "Creature", subtype: "Satyr", color: "G",
+    manaCost: "{1}{G}",
+    power: 2, toughness: 1, keywords: ["Haste", "Dredge"],
+    etb: "wayfinder",
+    rules: "Haste. ETB: Mill 3 cards into your Graveyard, return a Land from your Graveyard to your Hand, and gain +1 Resonance!"
+  },
+  grisly_salvage: {
+    id: "grisly_salvage", name: "Grisly Salvage", type: "Instant", color: "B",
+    manaCost: "{B}{G}",
+    keywords: ["Dredge", "Recur"],
+    effect: "grisly_salvage",
+    rules: "Mill 3 cards into your Graveyard, return the strongest Creature from your Graveyard to your Hand (or draw 1), and gain +2 Resonance!"
+  },
+  fiend_artisan: {
+    id: "fiend_artisan", name: "Fiend Artisan", type: "Creature", subtype: "Nightmare", color: "B",
+    manaCost: "{1}{B}{G}",
+    power: 2, toughness: 2, keywords: ["Trample", "Haste"],
+    etb: "fiend_artisan",
+    rules: "Trample, Haste. Undergrowth ETB: Permanently gains +1/+1 for each Creature card in your Graveyard and +1 Resonance!"
+  },
+  izoni_undergrowth: {
+    id: "izoni_undergrowth", name: "Spider Spawning", type: "Sorcery", color: "G",
+    manaCost: "{2}{B}{G}",
+    keywords: ["Tokens", "Undergrowth"],
+    effect: "spider_spawning",
+    rules: "Undergrowth: Create a 2/2 Green Spider token with Haste & Lifelink for each Creature in your Graveyard (min 2, max 5) and gain +2 Resonance!"
+  },
+
+  // === COLORLESS / ARTIFACT CONSTRUCT CARDS ({C}) ===
+  vault_skirge: {
+    id: "vault_skirge", name: "Vault Skirge", type: "Creature", subtype: "Construct", color: "C",
+    manaCost: "{2}",
+    power: 1, toughness: 1, keywords: ["Flying", "Lifelink", "Haste"],
+    rules: "Flying, Lifelink, Haste. Swift metallic construct that drains life from above."
+  },
+  steel_overseer: {
+    id: "steel_overseer", name: "Steel Overseer", type: "Creature", subtype: "Construct", color: "C",
+    manaCost: "{3}",
+    power: 1, toughness: 3, keywords: ["Anthem"],
+    etb: "overseer",
+    upkeep: "overseer",
+    rules: "ETB & Start of Turn: Permanently put +1/+1 on ALL Creatures you control and gain +1 Resonance!"
+  },
+  arcbound_ravager: {
+    id: "arcbound_ravager", name: "Arcbound Ravager", type: "Creature", subtype: "Construct", color: "C",
+    manaCost: "{3}",
+    power: 2, toughness: 2, keywords: ["Trample", "Haste"],
+    etb: "modular",
+    rules: "Trample, Haste. Modular ETB: Permanently gains +1/+1 for each other Creature you control and +1 Resonance!"
+  },
+  thoughtcast: {
+    id: "thoughtcast", name: "Thoughtcast", type: "Instant", color: "C",
+    manaCost: "{3}",
+    keywords: ["Draw 2"],
+    effect: "thoughtcast",
+    rules: "Affinity Draw: Draw 2 cards and gain +1 Resonance."
+  },
+  thopter_foundry: {
+    id: "thopter_foundry", name: "Thopter Foundry", type: "Sorcery", color: "C",
+    manaCost: "{3}",
+    keywords: ["Tokens", "Heal 2"],
+    effect: "thopter_foundry",
+    rules: "Create two 1/1 Colorless Thopter Construct tokens with Flying & Haste, heal 2 Life, and gain +1 Resonance."
+  },
+  galvanic_blast: {
+    id: "galvanic_blast", name: "Galvanic Blast", type: "Instant", color: "C",
+    manaCost: "{2}",
+    keywords: ["Metalcraft", "Burn 5"],
+    effect: "galvanic_blast",
+    rules: "Metalcraft: Destroy target Enemy Blocker (or deal 5 Burn Damage to the Boss if no Blockers) and gain +1 Resonance!"
+  },
+  cyberdrive_awakener: {
+    id: "cyberdrive_awakener", name: "Cyberdrive Awakener", type: "Sorcery", color: "C",
+    manaCost: "{5}",
+    keywords: ["Flying", "Overdrive"],
+    effect: "cyberdrive",
+    rules: "Overdrive: All Creatures you control gain +3/+3, Flying, and Haste this turn, plus +2 Resonance!"
+  },
+  myr_battlesphere: {
+    id: "myr_battlesphere", name: "Myr Battlesphere", type: "Creature", subtype: "Construct", color: "C",
+    manaCost: "{6}",
+    power: 5, toughness: 5, keywords: ["Trample", "Haste"],
+    etb: "battlesphere",
+    rules: "Trample, Haste. ETB: Create three 1/1 Colorless Myr Construct tokens with Haste and gain +2 Resonance!"
   }
 };
 
@@ -408,8 +508,64 @@ const STARTER_DECKS = [
       ...Array(3).fill("serra_angel"),
       ...Array(2).fill("sun_titan")
     ]
+  },
+  {
+    id: "golgari_graveyard",
+    name: "Golgari Undergrowth & Dredge ({B}/{G})",
+    badge: "Golgari Undergrowth ({B}/{G})",
+    colors: ["B", "G"],
+    startingRelic: "crucible_of_worlds",
+    desc: "Self-mill creatures into your Graveyard with Stitcher's Supplier & Satyr Wayfinder to trigger Crucible of Worlds, scale massive Fiend Artisans, and reanimate Archon of Cruelty.",
+    cards: [
+      ...Array(5).fill("swamp"),
+      ...Array(5).fill("forest"),
+      ...Array(3).fill("overgrown_tomb"),
+      ...Array(4).fill("evolving_wilds"),
+      ...Array(3).fill("stitchers_supplier"),
+      ...Array(3).fill("satyr_wayfinder"),
+      ...Array(2).fill("llanowar_elves"),
+      ...Array(3).fill("grisly_salvage"),
+      ...Array(3).fill("fiend_artisan"),
+      ...Array(3).fill("reanimate"),
+      ...Array(2).fill("vampire_nighthawk"),
+      ...Array(2).fill("izoni_undergrowth"),
+      ...Array(2).fill("archon_of_cruelty")
+    ]
+  },
+  {
+    id: "artifact_constructs",
+    name: "Colorless Affinity & Constructs ({C})",
+    badge: "Artifact Constructs ({C})",
+    colors: ["C"],
+    startingRelic: "sol_ring",
+    desc: "Hyper-accelerate with Sol Ring (+{C}{C}/turn) and pure Wastes, deploy modular Construct swarms with Steel Overseer & Thopter Foundry, and airlift your army with Cyberdrive Awakener.",
+    cards: [
+      ...Array(13).fill("wastes"),
+      ...Array(4).fill("evolving_wilds"),
+      ...Array(3).fill("vault_skirge"),
+      ...Array(3).fill("steel_overseer"),
+      ...Array(3).fill("arcbound_ravager"),
+      ...Array(3).fill("thoughtcast"),
+      ...Array(3).fill("thopter_foundry"),
+      ...Array(3).fill("galvanic_blast"),
+      ...Array(2).fill("cyberdrive_awakener"),
+      ...Array(3).fill("myr_battlesphere")
+    ]
   }
 ];
+
+// === STARTER DECK AVAILABILITY (Separated from deck definitions so all decks remain testable) ===
+const UNLOCKED_STARTER_DECK_IDS = new Set(STARTER_DECKS.map(d => d.id));
+
+function isStarterDeckAvailable(deckOrId) {
+  const id = typeof deckOrId === "string" ? deckOrId : deckOrId?.id;
+  if (!id || !STARTER_DECKS.some(d => d.id === id)) return false;
+  return UNLOCKED_STARTER_DECK_IDS.has(id);
+}
+
+function getAvailableStarterDecks() {
+  return STARTER_DECKS.filter(d => isStarterDeckAvailable(d.id));
+}
 
 // === ARCANE SCROLL CONSUMABLES ===
 const CONSUMABLE_DB = [
@@ -490,5 +646,138 @@ const ENCOUNTERS = [
     spawn: { name: "Praetor Guard", power: 4, toughness: 4, color: "W", keywords: [], count: 1 },
     cenobiteAura: 1,
     evenTurnBonusGuard: 1
+  }
+];
+
+// === BRANCHING ENCOUNTER MAP DEFINITIONS (Part 2) ===
+const ROUTE_NODE_TYPES = {
+  fight: { id: "fight", label: "Skirmish Ward", icon: "⚔️", badge: "FIGHT" },
+  elite: { id: "elite", label: "Elite Ward", icon: "💀", badge: "ELITE" },
+  boss: { id: "boss", label: "Planar Overlord", icon: "👑", badge: "BOSS" },
+  shop: { id: "shop", label: "Blind Eternities Sanctum", icon: "🛒", badge: "SANCTUM" },
+  rest: { id: "rest", label: "Planar Mana Leyline", icon: "🔥", badge: "REST SITE" },
+  event: { id: "event", label: "Planar Rift Anomaly", icon: "✨", badge: "EVENT" }
+};
+
+const CAMPAIGN_ROUTE_NODES = [
+  {
+    id: "p1_start",
+    step: 0,
+    plane: 1,
+    type: "fight",
+    encounterIdx: 0,
+    title: "Garruk's Vanguard",
+    subtitle: "Plane 1 • Skirmish Ward",
+    desc: "Break through Garruk's Beast vanguard to enter the Blind Eternities map.",
+    next: ["p1_upper_rest", "p1_lower_event"]
+  },
+  {
+    id: "p1_upper_rest",
+    step: 1,
+    plane: 1,
+    type: "rest",
+    encounterIdx: 0,
+    title: "Emerald Leyline Camp",
+    subtitle: "Plane 1 • Rest Site",
+    desc: "Meditate at the leyline: Restore +10 Life and temper a Creature in your deck (+2/+2 & Foil).",
+    healAmount: 10,
+    buffBonus: 2,
+    next: ["p1_elite"]
+  },
+  {
+    id: "p1_lower_event",
+    step: 1,
+    plane: 1,
+    type: "event",
+    encounterIdx: 0,
+    title: "Shrine of Forgotten Mana",
+    subtitle: "Plane 1 • Planar Event",
+    desc: "Channel the rift's unstable spark: Claim +$7 Gold, 1 Arcane Scroll, and +3 Life.",
+    goldBonus: 7,
+    healAmount: 3,
+    grantScroll: true,
+    next: ["p1_elite"]
+  },
+  {
+    id: "p1_elite",
+    step: 2,
+    plane: 1,
+    type: "elite",
+    encounterIdx: 1,
+    title: "Krenko, Mob Boss",
+    subtitle: "Plane 1 • Elite Ward",
+    desc: "Survive Krenko's doubling Goblin horde for an Elite Ward bounty.",
+    next: ["p1_boss"]
+  },
+  {
+    id: "p1_boss",
+    step: 3,
+    plane: 1,
+    type: "boss",
+    encounterIdx: 2,
+    title: "Sheoldred, the Apocalypse",
+    subtitle: "Plane 1 • Planar Overlord",
+    desc: "Overcome Sheoldred's Phyrexian Stax to ascend to Plane 2.",
+    next: ["p2_entry_fight", "p2_entry_shop"]
+  },
+  {
+    id: "p2_entry_fight",
+    step: 4,
+    plane: 2,
+    type: "fight",
+    encounterIdx: 3,
+    title: "Talrand, Sky Summoner",
+    subtitle: "Plane 2 • Skirmish Ward",
+    desc: "Challenge Talrand's aerial drake fleet for full combat bounty and Sanctum access.",
+    next: ["p2_mid_elite", "p2_mid_rest"]
+  },
+  {
+    id: "p2_entry_shop",
+    step: 4,
+    plane: 2,
+    type: "shop",
+    encounterIdx: 3,
+    title: "Blind Eternities Caravan",
+    subtitle: "Plane 2 • Sanctum Outpost",
+    desc: "Bypass Talrand's sky patrol: Receive +$6 Caravan Stipend, +4 Life, and enter a Sanctum Shop directly.",
+    goldBonus: 6,
+    healAmount: 4,
+    next: ["p2_mid_elite"]
+  },
+  {
+    id: "p2_mid_elite",
+    step: 5,
+    plane: 2,
+    type: "elite",
+    encounterIdx: 4,
+    title: "Vorinclex, Monstrous Raider",
+    subtitle: "Plane 2 • Elite Ward",
+    desc: "Smash through Vorinclex's Iron Hide before facing the Grand Cenobite.",
+    next: ["p2_boss"]
+  },
+  {
+    id: "p2_mid_rest",
+    step: 5,
+    plane: 2,
+    type: "rest",
+    encounterIdx: 4,
+    title: "Sanctum of New Phyrexia",
+    subtitle: "Plane 2 • Rest Site",
+    desc: "Evade Vorinclex's hunting grounds: Restore +12 Life, gain +$5 Gold, and temper a Creature (+2/+2 & Foil).",
+    healAmount: 12,
+    goldBonus: 5,
+    buffBonus: 2,
+    next: ["p2_boss"]
+  },
+  {
+    id: "p2_boss",
+    step: 6,
+    plane: 2,
+    type: "boss",
+    encounterIdx: 5,
+    title: "Elesh Norn, Grand Cenobite",
+    subtitle: "Plane 2 • Planar Overlord",
+    desc: "Shatter Elesh Norn's Cenobite Aura to conquer Plane 2 and save the Multiverse!",
+    next: []
   }
 ];

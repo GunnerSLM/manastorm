@@ -1,13 +1,18 @@
 // MANASTORM — Adversarial Stress Test Suite (Challenger M2-2)
-// Run with: node adversarial_stress_test.js
+// Run with: node adversarial_stress_test.js  OR  /System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc adversarial_stress_test.js
 
-const fs = require("fs");
-const path = require("path");
-const vm = require("vm");
-
-// Mock environment
-globalThis.load = (file) =>
-  vm.runInThisContext(fs.readFileSync(path.join(__dirname, file), "utf8"), { filename: file });
+if (typeof load === "undefined" && typeof require !== "undefined") {
+  const fs = require("fs");
+  const path = require("path");
+  const vm = require("vm");
+  globalThis.load = (file) =>
+    vm.runInThisContext(fs.readFileSync(path.join(__dirname, file), "utf8"), { filename: file });
+}
+if (typeof console === "undefined") {
+  globalThis.console = { log: (...args) => print(args.join(" ")) };
+}
+if (!console.warn) console.warn = console.log;
+if (!console.error) console.error = console.log;
 
 load("data/cards.js");
 load("data/relics.js");
@@ -1049,9 +1054,9 @@ console.log("--- 14. Velocity Lean Clamping Under Extreme Velocities ---");
 // ============================================================================
 console.log("--- 15. Sibling Spread Isolation During Active Drag ---");
 {
-  const fs = require("fs");
-  const path = require("path");
-  const css = fs.readFileSync(path.join(__dirname, "style.css"), "utf8");
+  const css = typeof readFile === "function"
+    ? readFile("style.css")
+    : require("fs").readFileSync(require("path").join(__dirname, "style.css"), "utf8");
 
   // Verify that hover / focus sibling spread rules require :not(.is-dragging)
   const spreadRules = [

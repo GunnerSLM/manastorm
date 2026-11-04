@@ -1859,6 +1859,916 @@ function createMemoryStorage(initial = {}) {
   );
 }
 
+// ============================================================================
+// 7. STARTER DECKS, AVAILABILITY SEPARATION & NEW CARD MECHANICS SUITE
+// ============================================================================
+
+// --- 7.1 All Starter Decks Validate 40-Card List (17 Lands + 23 Spells), Card IDs, and Starting Relics ---
+{
+  assert(
+    Array.isArray(STARTER_DECKS) && STARTER_DECKS.length >= 6,
+    `7.1.1 STARTER_DECKS defines at least 6 starter decks (got ${STARTER_DECKS.length})`
+  );
+
+  const deckIds = STARTER_DECKS.map(d => d.id);
+  assert(
+    deckIds.includes("golgari_graveyard") && deckIds.includes("artifact_constructs"),
+    "7.1.2 STARTER_DECKS includes 'golgari_graveyard' and 'artifact_constructs'"
+  );
+
+  STARTER_DECKS.forEach(deck => {
+    assert(
+      Array.isArray(deck.cards) && deck.cards.length === 40,
+      `7.1.3 Deck '${deck.id}' contains exactly 40 cards (got ${deck.cards ? deck.cards.length : 0})`
+    );
+    const allCardsExist = deck.cards.every(id => Boolean(CARD_DB[id]));
+    assert(
+      allCardsExist,
+      `7.1.4 Every card ID in '${deck.id}' exists in CARD_DB`
+    );
+    const landCount = deck.cards.filter(id => CARD_DB[id] && CARD_DB[id].type === "Land").length;
+    const spellCount = deck.cards.filter(id => CARD_DB[id] && CARD_DB[id].type !== "Land").length;
+    assert(
+      landCount === 17 && spellCount === 23,
+      `7.1.5 Deck '${deck.id}' has 17 Lands and 23 Spells (got ${landCount} Lands, ${spellCount} Spells)`
+    );
+    const relicValid = RELIC_DB.some(r => r.id === deck.startingRelic);
+    assert(
+      relicValid,
+      `7.1.6 Deck '${deck.id}' has a valid startingRelic ('${deck.startingRelic}') in RELIC_DB`
+    );
+    assert(
+      Array.isArray(deck.colors) && deck.colors.length > 0 && typeof deck.name === "string" && typeof deck.badge === "string",
+      `7.1.7 Deck '${deck.id}' defines colors, name, and badge metadata`
+    );
+  });
+}
+
+// --- 7.2 Deck Availability Separation from STARTER_DECKS Definitions ---
+{
+  assert(
+    typeof isStarterDeckAvailable === "function" && typeof getAvailableStarterDecks === "function",
+    "7.2.1 Deck availability helpers (isStarterDeckAvailable, getAvailableStarterDecks) are defined"
+  );
+
+  const initialAvailable = getAvailableStarterDecks();
+  assert(
+    initialAvailable.length === STARTER_DECKS.length,
+    "7.2.2 All starter decks are available by default"
+  );
+
+  // Temporarily lock a deck via UNLOCKED_STARTER_DECK_IDS and verify STARTER_DECKS remains intact and testable
+  UNLOCKED_STARTER_DECK_IDS.delete("artifact_constructs");
+  try {
+    assert(
+      isStarterDeckAvailable("artifact_constructs") === false &&
+      isStarterDeckAvailable("golgari_graveyard") === true,
+      "7.2.3 isStarterDeckAvailable reflects UNLOCKED_STARTER_DECK_IDS state"
+    );
+    assert(
+      getAvailableStarterDecks().length === STARTER_DECKS.length - 1 &&
+      STARTER_DECKS.some(d => d.id === "artifact_constructs"),
+      "7.2.4 Locking a deck filters getAvailableStarterDecks() while keeping STARTER_DECKS definition testable"
+    );
+
+    const artifactDeck = STARTER_DECKS.find(d => d.id === "artifact_constructs");
+    startNewRun(artifactDeck);
+    assert(
+      state.deckArchetype.id === "artifact_constructs" && state.masterDeck.length === 40,
+      "7.2.5 Locked starter deck can still be directly instantiated in startNewRun for testing"
+    );
+  } finally {
+    UNLOCKED_STARTER_DECK_IDS.add("artifact_constructs");
+  }
+}
+
+// --- 7.3 Golgari Graveyard / Undergrowth Card Mechanics ---
+{
+  // Stitcher's Supplier + Crucible of Worlds self-mill synergy
+  resetTestState();
+  state.relics = [{ ...RELIC_DB.find(r => r.id === "crucible_of_worlds") }];
+  state.library = [
+    cloneCard("forest"),
+    cloneCard("fiend_artisan"),
+    cloneCard("archon_of_cruelty")
+  ];
+  handleCreatureCast(cloneCard("stitchers_supplier"));
+  assert(
+    state.library.length === 0 &&
+    state.graveyard.length === 3 &&
+    state.turnResonance === 4 &&
+    state.manaPool.ANY === 2,
+    `7.3.1 Stitcher's Supplier mills 3 cards into Graveyard (+1 Mult) and triggers Crucible of Worlds (+2 Mult & +2 Treasure, capped at 2x/turn) (got gy=${state.graveyard.length}, mult=${state.turnResonance}, any=${state.manaPool.ANY})`
+  );
+
+  // Satyr Wayfinder mills 3 and returns a Land from Graveyard to Hand
+  resetTestState();
+  state.hand = [];
+  state.library = [
+    cloneCard("fiend_artisan"),
+    cloneCard("overgrown_tomb"),
+    cloneCard("swamp")
+  ];
+  handleCreatureCast(cloneCard("satyr_wayfinder"));
+  assert(
+    state.hand.length === 1 &&
+    state.hand[0].id === "overgrown_tomb" &&
+    state.graveyard.length === 2,
+    `7.3.2 Satyr Wayfinder mills 3 cards and recovers a Land (preferring Dual/Fetch) from Graveyard to Hand`
+  );
+
+  // Grisly Salvage mills 3 and returns the strongest Creature from Graveyard to Hand
+  resetTestState();
+  state.hand = [];
+  state.library = [
+    cloneCard("stitchers_supplier"),
+    cloneCard("archon_of_cruelty"),
+    cloneCard("forest")
+  ];
+  handleSpellCast(cloneCard("grisly_salvage"));
+  assert(
+    state.hand.length === 1 &&
+    state.hand[0].id === "archon_of_cruelty" &&
+    state.turnResonance === 3,
+    "7.3.3 Grisly Salvage mills 3 cards, returns strongest Creature from Graveyard to Hand, and adds +2 Resonance"
+  );
+
+  // Fiend Artisan scales +1/+1 per Creature in Graveyard
+  resetTestState();
+  state.graveyard = [
+    cloneCard("stitchers_supplier"),
+    cloneCard("satyr_wayfinder"),
+    cloneCard("vampire_nighthawk"),
+    cloneCard("forest") // Land should not count
+  ];
+  handleCreatureCast(cloneCard("fiend_artisan"));
+  const artisan = state.playerCreatures.find(c => c.id === "fiend_artisan");
+  assert(
+    artisan && artisan.power === 5 && artisan.toughness === 5,
+    `7.3.4 Fiend Artisan (base 2/2) gains +1/+1 for each of the 3 Creatures in Graveyard -> 5/5 (got ${artisan ? artisan.power : 0}/${artisan ? artisan.toughness : 0})`
+  );
+
+  // Spider Spawning spawns 2/2 Haste Lifelink Spiders scaled by Graveyard creatures (clamped 2..5)
+  resetTestState();
+  state.graveyard = [
+    cloneCard("stitchers_supplier"),
+    cloneCard("satyr_wayfinder"),
+    cloneCard("vampire_nighthawk"),
+    cloneCard("archon_of_cruelty")
+  ];
+  handleSpellCast(cloneCard("izoni_undergrowth"));
+  const spiders = state.playerCreatures.find(c => c.name === "Spider Token");
+  assert(
+    spiders && spiders.count === 4 && spiders.power === 2 && spiders.keywords.includes("Lifelink") && spiders.keywords.includes("Haste"),
+    `7.3.5 Spider Spawning creates 4x 2/2 Haste Lifelink Spider tokens for 4 Graveyard Creatures (got count=${spiders ? spiders.count : 0})`
+  );
+}
+
+// --- 7.4 Colorless / Artifact Construct Card Mechanics & Shop Pool Weighting ---
+{
+  // Wastes basic land taps for {C} and pays generic mana costs
+  resetTestState();
+  const wastesCard = cloneCard("wastes");
+  handleLandPlay(wastesCard);
+  const plan = findManaPaymentPlan("{1}");
+  assert(
+    plan !== null && plan.landsToTap.length === 1 && plan.landsToTap[0] === wastesCard.uid,
+    "7.4.1 Wastes basic land enters untapped and pays generic {1} cost"
+  );
+
+  // Thopter Foundry + Steel Overseer + Arcbound Ravager + Cyberdrive Awakener
+  resetTestState();
+  handleSpellCast(cloneCard("thopter_foundry"));
+  const thopters = state.playerCreatures.find(c => c.name === "Thopter Construct");
+  assert(
+    thopters && thopters.count === 2 && thopters.subtype === "Construct" && thopters.keywords.includes("Flying"),
+    "7.4.2 Thopter Foundry spawns two 1/1 Flying Haste Thopter Construct tokens"
+  );
+
+  handleCreatureCast(cloneCard("steel_overseer"));
+  assert(
+    thopters.power === 2 && thopters.toughness === 2,
+    "7.4.3 Steel Overseer ETB permanently buffs all controlled creatures by +1/+1"
+  );
+
+  // Start of next turn triggers Steel Overseer upkeep anthem
+  state.library = [cloneCard("wastes")];
+  startPlayerTurn(false);
+  assert(
+    thopters.power === 3 && thopters.toughness === 3,
+    "7.4.4 Steel Overseer upkeep permanently buffs all controlled creatures by +1/+1 at start of turn"
+  );
+
+  // Arcbound Ravager Modular ETB counts other controlled creature units (2 Thopters + 1 Steel Overseer = +3/+3 -> 5/5)
+  handleCreatureCast(cloneCard("arcbound_ravager"));
+  const ravager = state.playerCreatures.find(c => c.id === "arcbound_ravager");
+  assert(
+    ravager && ravager.power === 5 && ravager.toughness === 5,
+    `7.4.5 Arcbound Ravager (base 2/2) gains +3/+3 for 3 other controlled units -> 5/5 (got ${ravager ? ravager.power : 0}/${ravager ? ravager.toughness : 0})`
+  );
+
+  // Myr Battlesphere spawns 3 Myr Construct tokens
+  handleCreatureCast(cloneCard("myr_battlesphere"));
+  const myrs = state.playerCreatures.find(c => c.name === "Myr Construct");
+  assert(
+    myrs && myrs.count === 3 && myrs.subtype === "Construct",
+    "7.4.6 Myr Battlesphere ETB spawns three 1/1 Haste Myr Construct tokens"
+  );
+
+  // Cyberdrive Awakener grants +3/+3, Flying, and Haste to all creatures this turn
+  handleSpellCast(cloneCard("cyberdrive_awakener"));
+  assert(
+    ravager.tempPower === 3 && getCreatureKeywords(ravager).includes("Flying"),
+    "7.4.7 Cyberdrive Awakener grants +3/+3 and Flying to all creatures this turn"
+  );
+
+  // Galvanic Blast destroys blocker or deals 5 Burn to Boss
+  resetTestState();
+  handleSpellCast(cloneCard("galvanic_blast"));
+  assert(
+    state.turnBurnPower === 5 && state.turnResonance === 2,
+    "7.4.8 Galvanic Blast deals +5 Burn Power to Boss and +1 Resonance when no blockers are present"
+  );
+
+  // Colorless shop pool weighting: Artifact Constructs deck drafts colorless cards in-color
+  resetTestState();
+  const artifactArch = STARTER_DECKS.find(d => d.id === "artifact_constructs");
+  startNewRun(artifactArch);
+  let colorlessDraftHits = 0;
+  let totalDraftCards = 0;
+  for (let i = 0; i < 20; i++) {
+    generateShopStock(false);
+    state.shopStock.cards.forEach(item => {
+      totalDraftCards++;
+      if (item.card.color === "C" || item.card.isFetch) colorlessDraftHits++;
+    });
+  }
+  assert(
+    colorlessDraftHits / totalDraftCards >= 0.75,
+    `7.4.9 Artifact Constructs shop draft pool weights Colorless/Fetch cards >= 75% (got ${colorlessDraftHits}/${totalDraftCards})`
+  );
+}
+
+// ============================================================================
+// SECTION 8: BRANCHING ENCOUNTER MAP (PART 2)
+// ============================================================================
+console.log("\n=== SECTION 8: BRANCHING ENCOUNTER MAP (PART 2) ===");
+
+// --- 8.1 Route Graph Structure & Reachability ---
+{
+  assert(
+    typeof ROUTE_NODE_TYPES === "object" &&
+    ROUTE_NODE_TYPES.fight &&
+    ROUTE_NODE_TYPES.elite &&
+    ROUTE_NODE_TYPES.boss &&
+    ROUTE_NODE_TYPES.shop &&
+    ROUTE_NODE_TYPES.rest &&
+    ROUTE_NODE_TYPES.event,
+    "8.1.1 ROUTE_NODE_TYPES defines fight, elite, boss, shop, rest, and event node types"
+  );
+
+  assert(
+    Array.isArray(CAMPAIGN_ROUTE_NODES) && CAMPAIGN_ROUTE_NODES.length >= 8,
+    `8.1.2 CAMPAIGN_ROUTE_NODES defines a branching graph (${CAMPAIGN_ROUTE_NODES.length} nodes)`
+  );
+
+  const nodeById = new Map(CAMPAIGN_ROUTE_NODES.map(n => [n.id, n]));
+  const startNode = CAMPAIGN_ROUTE_NODES[0];
+  const reachable = new Set();
+  const queue = [startNode.id];
+  let allEdgesValid = true;
+  let allStepsIncreasing = true;
+
+  while (queue.length > 0) {
+    const curId = queue.shift();
+    if (reachable.has(curId)) continue;
+    reachable.add(curId);
+    const cur = nodeById.get(curId);
+    for (const nextId of (cur.next || [])) {
+      const nextNode = nodeById.get(nextId);
+      if (!nextNode) {
+        allEdgesValid = false;
+      } else {
+        if (nextNode.step <= cur.step) allStepsIncreasing = false;
+        queue.push(nextId);
+      }
+    }
+  }
+
+  assert(
+    allEdgesValid && allStepsIncreasing && reachable.size === CAMPAIGN_ROUTE_NODES.length,
+    `8.1.3 Every node in CAMPAIGN_ROUTE_NODES is reachable from ${startNode.id} in a strictly forward DAG`
+  );
+
+  const terminalNodes = CAMPAIGN_ROUTE_NODES.filter(n => !n.next || n.next.length === 0);
+  assert(
+    terminalNodes.length === 1 && terminalNodes[0].id === "p2_boss",
+    "8.1.4 All paths in CAMPAIGN_ROUTE_NODES converge at the Plane 2 final boss (p2_boss)"
+  );
+}
+
+// --- 8.2 Invalid Choices Rejected & Completing a Node Exactly Once ---
+{
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+
+  assert(
+    state.route && state.route.currentNodeId === "p1_start" && state.route.completedNodeIds.length === 0,
+    "8.2.1 startNewRun initializes state.route at p1_start with no completed nodes"
+  );
+
+  // Cannot select next node before completing current node
+  assert(
+    canSelectRouteNode("p1_upper_rest") === false && selectRouteNode("p1_upper_rest") === false,
+    "8.2.2 Cannot select a connected next node before the current node is completed"
+  );
+
+  // Completing current node works exactly once
+  const firstComplete = completeCurrentRouteNode();
+  const secondComplete = completeCurrentRouteNode();
+  assert(
+    firstComplete === true && secondComplete === false && state.route.completedNodeIds.length === 1,
+    "8.2.3 completeCurrentRouteNode marks the current node completed exactly once"
+  );
+
+  // Invalid choices rejected: unknown ID, already-completed node, or non-connected future node
+  assert(
+    canSelectRouteNode("nonexistent_node") === false &&
+    canSelectRouteNode("p1_start") === false &&
+    canSelectRouteNode("p1_boss") === false &&
+    canSelectRouteNode("p2_entry_shop") === false &&
+    selectRouteNode("p1_boss") === false,
+    "8.2.4 Rejects invalid route choices (unknown ID, already completed node, or non-adjacent node)"
+  );
+
+  // Valid choices from p1_start are p1_upper_rest and p1_lower_event
+  const nextFromStart = getAvailableNextRouteNodes().map(n => n.id);
+  assert(
+    nextFromStart.length === 2 &&
+    nextFromStart.includes("p1_upper_rest") &&
+    nextFromStart.includes("p1_lower_event"),
+    "8.2.5 Completing p1_start unlocks both p1_upper_rest and p1_lower_event branches"
+  );
+}
+
+// --- 8.3 Branching Path Resolution (Rest Site, Event, Shop Outpost & Combat) ---
+{
+  // Path A: p1_start -> p1_upper_rest (Rest Site) -> p1_elite -> p1_boss -> p2_entry_shop (Shop) -> p2_mid_elite -> p2_boss
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+  state.playerLife = 14;
+  completeCurrentRouteNode();
+
+  const choseRest = selectRouteNode("p1_upper_rest");
+  const foilCountAfterRest = state.masterDeck.filter(c => c.foil).length;
+  assert(
+    choseRest === true &&
+    state.route.currentNodeId === "p1_upper_rest" &&
+    state.route.completedNodeIds.includes("p1_upper_rest") &&
+    state.playerLife === 24 &&
+    foilCountAfterRest >= 1,
+    "8.3.1 Selecting p1_upper_rest (Rest Site) heals +10 Life, buffs/foils a Creature, and completes the node"
+  );
+
+  // Sibling branch p1_lower_event is now unreachable, and re-resolving p1_upper_rest is rejected
+  const duplicateResolve = resolveNonCombatRouteNode(getRouteNodeById("p1_upper_rest"));
+  assert(
+    canSelectRouteNode("p1_lower_event") === false &&
+    canSelectRouteNode("p1_upper_rest") === false &&
+    duplicateResolve.ok === false &&
+    duplicateResolve.reason === "already_completed",
+    "8.3.2 Choosing a branch locks out its sibling branch and prevents completing the same node twice"
+  );
+
+  // Advance to p1_elite (Krenko) and p1_boss (Sheoldred)
+  assert(
+    selectRouteNode("p1_elite") === true && state.encounterIdx === 1,
+    "8.3.3 Selecting p1_elite transitions to Encounter 1 (Krenko, Mob Boss)"
+  );
+  completeCurrentRouteNode();
+  assert(
+    selectRouteNode("p1_boss") === true && state.encounterIdx === 2,
+    "8.3.4 Selecting p1_boss transitions to Encounter 2 (Sheoldred, the Apocalypse)"
+  );
+  completeCurrentRouteNode();
+
+  // Plane 2 entry branch: choose p2_entry_shop (Blind Eternities Caravan) instead of fighting Talrand
+  const goldBeforeShopNode = state.gold;
+  state.playerLife = 20;
+  const choseShopNode = selectRouteNode("p2_entry_shop");
+  assert(
+    choseShopNode === true &&
+    state.route.currentNodeId === "p2_entry_shop" &&
+    state.route.completedNodeIds.includes("p2_entry_shop") &&
+    state.gold === goldBeforeShopNode + 6 &&
+    state.playerLife === 24 &&
+    state.shopStock.cards.length > 0,
+    "8.3.5 Selecting p2_entry_shop grants +$6 Caravan Stipend, +4 Life, and generates Sanctum Shop stock"
+  );
+
+  // Path B: p1_start -> p1_lower_event (Event)
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+  state.playerLife = 15;
+  const goldBeforeEvent = state.gold;
+  const scrollsBeforeEvent = state.consumables.length;
+  completeCurrentRouteNode();
+  const choseEvent = selectRouteNode("p1_lower_event");
+  assert(
+    choseEvent === true &&
+    state.playerLife === 18 &&
+    state.gold === goldBeforeEvent + 7 &&
+    state.consumables.length === scrollsBeforeEvent + 1,
+    "8.3.6 Selecting p1_lower_event (Event) grants +$7 Gold, +3 Life, and 1 Arcane Scroll"
+  );
+}
+
+// --- 8.4 Route Save/Restore Preservation (Canonical Save & Full Run Snapshot) ---
+{
+  const prevHeadless = state.headless;
+  const prevDoc = globalThis.document;
+  const prevLS = globalThis.localStorage;
+  const memStore = createMemoryStorage();
+
+  try {
+    state.headless = false;
+    globalThis.document = {};
+    globalThis.localStorage = memStore;
+
+    startNewRun(STARTER_DECKS[0]);
+    completeCurrentRouteNode(); // complete p1_start
+    selectRouteNode("p1_lower_event"); // complete p1_lower_event
+    selectRouteNode("p1_elite"); // enter Krenko fight
+    completeCurrentRouteNode(); // complete Krenko
+    selectRouteNode("p1_boss"); // enter Sheoldred fight
+    completeCurrentRouteNode(); // complete Sheoldred -> pending choice between p2_entry_fight and p2_entry_shop
+    state.route.pendingSelection = true;
+
+    const fullSnap = createFullRunSnapshot();
+    const savedOk = saveRunState(true);
+    assert(savedOk === true, "8.4.1 saveRunState persists run with active branching route state");
+
+    // Mutate route state to verify both restoreFullRunSnapshot and loadRunState restore exact route choices
+    state.route = createInitialRouteState(0);
+    restoreFullRunSnapshot(fullSnap);
+    assert(
+      state.route.currentNodeId === "p1_boss" &&
+      state.route.completedNodeIds.includes("p1_lower_event") &&
+      !state.route.completedNodeIds.includes("p1_upper_rest") &&
+      state.route.pendingSelection === true,
+      "8.4.2 restoreFullRunSnapshot restores exact currentNodeId, completedNodeIds, and pendingSelection"
+    );
+
+    // Scramble route again and restore from localStorage via loadRunState
+    state.route = createInitialRouteState(0);
+    state.encounterIdx = 0;
+    const loadedOk = loadRunState();
+    const availableAfterRestore = getAvailableNextRouteNodes().map(n => n.id);
+    assert(
+      loadedOk === true &&
+      state.route.currentNodeId === "p1_boss" &&
+      state.route.visitedNodeIds.includes("p1_lower_event") &&
+      !state.route.visitedNodeIds.includes("p1_upper_rest") &&
+      availableAfterRestore.length === 2 &&
+      availableAfterRestore.includes("p2_entry_fight") &&
+      availableAfterRestore.includes("p2_entry_shop"),
+      "8.4.3 loadRunState restores saved route history and exact available next choices (p2_entry_fight, p2_entry_shop)"
+    );
+  } finally {
+    state.headless = prevHeadless;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevLS === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevLS;
+  }
+}
+
+// ============================================================================
+// SECTION 9: POST-BATTLE CARD DRAFT & SAVE RESTORATION (Part 3)
+// ============================================================================
+console.log(`\n=== SECTION 9: POST-BATTLE CARD DRAFT & SAVE RESTORATION ===`);
+
+// --- 9.1: Card Legality & Pool Sampling ---
+{
+  const basicLandIds = ["forest", "mountain", "swamp", "island", "plains", "wastes"];
+  
+  // 9.1.1: Exclude all basic lands across all decks
+  let allBasicsExcluded = true;
+  STARTER_DECKS.forEach(deck => {
+    const deckColors = new Set(deck.colors);
+    basicLandIds.forEach(id => {
+      if (isCardLegalForDeck(id, deckColors) || isCardLegalForDeck(CARD_DB[id], deckColors)) {
+        allBasicsExcluded = false;
+      }
+    });
+  });
+  assert(allBasicsExcluded === true, "9.1.1 isCardLegalForDeck strictly excludes all basic lands for all archetypes");
+
+  // 9.1.2: Fetch land (evolving_wilds) is legal for all archetypes
+  let fetchLegalEverywhere = true;
+  STARTER_DECKS.forEach(deck => {
+    const deckColors = new Set(deck.colors);
+    if (!isCardLegalForDeck("evolving_wilds", deckColors)) {
+      fetchLegalEverywhere = false;
+    }
+  });
+  assert(fetchLegalEverywhere === true, "9.1.2 Fetch land (evolving_wilds) is universal fixer legal for all starter decks");
+
+  // 9.1.3: Dual lands match only when all produced colors match deck
+  const gruulCols = new Set(["G", "R"]);
+  const izzetCols = new Set(["U", "R"]);
+  assert(
+    isCardLegalForDeck("stomping_ground", gruulCols) === true &&
+    isCardLegalForDeck("stomping_ground", izzetCols) === false &&
+    isCardLegalForDeck("steam_vents", izzetCols) === true &&
+    isCardLegalForDeck("steam_vents", gruulCols) === false,
+    "9.1.3 Dual lands are legal only when all produced colors are in deckColors"
+  );
+
+  // 9.1.4: Colorless construct cards are legal for Colorless archetype and excluded from colored decks
+  const colorlessCols = new Set(["C"]);
+  assert(
+    isCardLegalForDeck("arcbound_ravager", colorlessCols) === true &&
+    isCardLegalForDeck("vault_skirge", colorlessCols) === true &&
+    isCardLegalForDeck("thoughtcast", colorlessCols) === true &&
+    isCardLegalForDeck("arcbound_ravager", gruulCols) === false &&
+    isCardLegalForDeck("thoughtcast", izzetCols) === false,
+    "9.1.4 Colorless cards are legal for Colorless archetype {C} and excluded from colored decks"
+  );
+
+  // 9.1.5: Multi-color colored cards require all pips in deck
+  const borosCols = new Set(["W", "R"]);
+  const monoWhiteCols = new Set(["W"]);
+  assert(
+    isCardLegalForDeck("brainstorm", izzetCols) === true &&
+    isCardLegalForDeck("brainstorm", new Set(["U"])) === false &&
+    isCardLegalForDeck("heroic_reinforcements", borosCols) === true &&
+    isCardLegalForDeck("heroic_reinforcements", monoWhiteCols) === false,
+    "9.1.5 Multi-color cards require all colored mana pips to be present in deckColors"
+  );
+
+  // 9.1.6 & 9.1.7: sampleDraftPool returns exactly 3 distinct cards without replacement for all archetypes
+  let allDraftsValid = true;
+  STARTER_DECKS.forEach(deck => {
+    const deckColors = new Set(deck.colors);
+    const pool = sampleDraftPool(deckColors, 3);
+    if (!Array.isArray(pool) || pool.length !== 3) allDraftsValid = false;
+    const ids = pool.map(c => typeof c === "string" ? c : c.id);
+    if (new Set(ids).size !== 3) allDraftsValid = false;
+    if (ids.some(id => basicLandIds.includes(id))) allDraftsValid = false;
+    if (!ids.every(id => isCardLegalForDeck(id, deckColors))) allDraftsValid = false;
+  });
+  assert(allDraftsValid === true, "9.1.6 sampleDraftPool returns 3 distinct legal non-basic cards without replacement for all decks");
+
+  // 9.1.8: Deterministic sampling with mock RNG produces repeatable exact sequence
+  let seqIdx = 0;
+  const mockSequence = [0.1, 0.5, 0.9];
+  const deterministicRng = () => mockSequence[seqIdx++ % mockSequence.length];
+  seqIdx = 0;
+  const poolA = sampleDraftPool(gruulCols, 3, deterministicRng).map(c => c.id || c);
+  seqIdx = 0;
+  const poolB = sampleDraftPool(gruulCols, 3, deterministicRng).map(c => c.id || c);
+  assert(
+    poolA.length === 3 &&
+    poolA[0] === poolB[0] &&
+    poolA[1] === poolB[1] &&
+    poolA[2] === poolB[2],
+    "9.1.8 Deterministic RNG produces identical repeatable draft pool choices"
+  );
+
+  // 9.1.9: Edge case: count > pool size returns all available cards safely without error
+  const tinyPool = sampleDraftPool(colorlessCols, 100);
+  assert(
+    Array.isArray(tinyPool) && tinyPool.length > 0 && tinyPool.length < 100,
+    "9.1.9 sampleDraftPool handles count exceeding pool size safely without crashing"
+  );
+}
+
+// --- 9.2: Encounter Victory Interception & Final Campaign Bypass ---
+{
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+
+  // Non-final victory (encounter 0): generates pendingDraft
+  state.encounterIdx = 0;
+  state.enemyLife = 0;
+  handleEncounterVictory();
+
+  assert(
+    state.pendingDraft &&
+    Array.isArray(state.pendingDraft.choices) &&
+    state.pendingDraft.choices.length === 3 &&
+    state.pendingDraft.encounterIdx === 0 &&
+    state.pendingDraft.resolved === false &&
+    state.pendingDraft.skipped === false &&
+    state.pendingDraft.selectedCardId === null,
+    "9.2.1 Defeating non-final encounter sets state.pendingDraft with 3 choices, resolved: false"
+  );
+
+  // beginEncounter resets pendingDraft
+  beginEncounter();
+  assert(state.pendingDraft === null, "9.2.2 beginEncounter resets state.pendingDraft to null");
+
+  // Final campaign encounter (encounter 5, Elesh Norn): bypasses draft completely
+  state.encounterIdx = ENCOUNTERS.length - 1;
+  state.enemyLife = 0;
+  handleEncounterVictory();
+
+  assert(
+    state.pendingDraft === null,
+    "9.2.3 Defeating final campaign encounter (Elesh Norn) bypasses draft generation (pendingDraft === null)"
+  );
+}
+
+// --- 9.3: Card Selection Mechanics & Idempotency ---
+{
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+  state.encounterIdx = 0;
+  state.enemyLife = 0;
+  handleEncounterVictory();
+
+  const initialDeckSize = state.masterDeck.length;
+  const chosenChoice = state.pendingDraft.choices[1];
+  const chosenId = typeof chosenChoice === "string" ? chosenChoice : chosenChoice.id;
+
+  // Invalid index selection is rejected
+  assert(
+    selectDraftCard(-1) === false &&
+    selectDraftCard(99) === false &&
+    state.masterDeck.length === initialDeckSize,
+    "9.3.1 Out-of-bounds selection index is rejected without altering deck"
+  );
+
+  // Valid card selection
+  const selectSuccess = selectDraftCard(1);
+  assert(
+    selectSuccess === true &&
+    state.masterDeck.length === initialDeckSize + 1 &&
+    state.masterDeck[state.masterDeck.length - 1].id === chosenId &&
+    state.pendingDraft.resolved === true &&
+    state.pendingDraft.skipped === false &&
+    state.pendingDraft.selectedCardId === chosenId,
+    "9.3.2 selectDraftCard adds card clone to masterDeck, updates count, and sets resolved: true"
+  );
+
+  // Idempotency guard: double selection strictly rejected
+  const doubleSelect = selectDraftCard(0);
+  assert(
+    doubleSelect === false &&
+    state.masterDeck.length === initialDeckSize + 1,
+    "9.3.3 Re-selecting after resolution is rejected (idempotency guard)"
+  );
+
+  // Cannot skip after select
+  const skipAfterSelect = skipDraft();
+  assert(
+    skipAfterSelect === false,
+    "9.3.4 Calling skipDraft after card selection is rejected"
+  );
+}
+
+// --- 9.4: Draft Skip Compensation & Idempotency ---
+{
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+  state.encounterIdx = 1;
+  state.enemyLife = 0;
+  handleEncounterVictory();
+
+  const initialDeckSize = state.masterDeck.length;
+  const initialGold = state.gold;
+
+  const skipSuccess = skipDraft();
+  assert(
+    skipSuccess === true &&
+    state.masterDeck.length === initialDeckSize &&
+    state.gold === initialGold + 2 &&
+    state.pendingDraft.resolved === true &&
+    state.pendingDraft.skipped === true &&
+    state.pendingDraft.selectedCardId === null,
+    "9.4.1 skipDraft awards +$2 gold, adds 0 cards to masterDeck, and marks draft resolved"
+  );
+
+  // Double skip strictly rejected
+  const doubleSkip = skipDraft();
+  assert(
+    doubleSkip === false &&
+    state.gold === initialGold + 2,
+    "9.4.2 Calling skipDraft a second time is rejected (gold remains unchanged)"
+  );
+
+  // Cannot select after skip
+  const selectAfterSkip = selectDraftCard(0);
+  assert(
+    selectAfterSkip === false &&
+    state.masterDeck.length === initialDeckSize,
+    "9.4.3 Calling selectDraftCard after skip is rejected (deck size remains unchanged)"
+  );
+}
+
+// --- 9.5: Save / Restore Persistence ---
+{
+  const prevDoc = globalThis.document;
+  const prevLS = globalThis.localStorage;
+  const memStore = createMemoryStorage();
+  const prevHeadless = state.headless;
+
+  try {
+    resetTestState();
+    startNewRun(STARTER_DECKS[0]);
+    state.headless = false;
+    globalThis.document = {};
+    globalThis.localStorage = memStore;
+    state.encounterIdx = 0;
+    state.enemyLife = 0;
+    handleEncounterVictory();
+
+    const originalChoices = [...state.pendingDraft.choices];
+    assert(originalChoices.length === 3, "9.5.1 Pending draft generated before save");
+
+    // Save while draft is pending
+    const savedPending = saveRunState(false);
+    assert(savedPending === true, "9.5.2 saveRunState successfully persists state with active pendingDraft");
+
+    // Clear state in-memory and reload from localStorage
+    state.pendingDraft = null;
+    state.masterDeck = [];
+    const loadSuccess = loadRunState();
+
+    assert(
+      loadSuccess === true &&
+      state.pendingDraft &&
+      state.pendingDraft.resolved === false &&
+      state.pendingDraft.choices.length === 3 &&
+      state.pendingDraft.choices[0] === originalChoices[0] &&
+      state.pendingDraft.choices[1] === originalChoices[1] &&
+      state.pendingDraft.choices[2] === originalChoices[2],
+      "9.5.3 loadRunState restores exact draft choices and unresolved state on reload"
+    );
+
+    // Resolve draft by selecting card 0, then save again
+    const chosenCardId = state.pendingDraft.choices[0];
+    const initialDeckLen = state.masterDeck.length;
+    selectDraftCard(0);
+    assert(state.masterDeck.length === initialDeckLen + 1, "9.5.4 Card successfully drafted into deck");
+
+    saveRunState(true);
+
+    // Reload again: draft must be resolved, choices preserved, and no duplicate rewards
+    loadRunState();
+    assert(
+      (!state.pendingDraft || state.pendingDraft.resolved === true) &&
+      state.masterDeck.length === initialDeckLen + 1,
+      "9.5.5 Reloading after draft resolution does not re-offer draft or duplicate rewards"
+    );
+  } finally {
+    state.headless = prevHeadless;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevLS === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevLS;
+  }
+}
+
+// --- 9.6: Normalizer Parity Across Files ---
+{
+  load("desktop.js");
+
+  const rawValid = {
+    version: 1,
+    savedAt: 1700000000000,
+    inShop: false,
+    archetypeId: "gruul",
+    encounterIdx: 1,
+    playerLife: 20,
+    gold: 10,
+    masterDeck: [{ id: "lightning_bolt" }],
+    relicIds: [],
+    consumableIds: [],
+    pendingDraft: {
+      choices: ["stomping_ground", "lotus_cobra", "cultivate"],
+      encounterIdx: 1,
+      resolved: false,
+      skipped: false,
+      selectedCardId: null
+    }
+  };
+
+  const normGame = normalizeCanonicalSave(rawValid);
+  const normDesk = DesktopBridge.normalizeSaveObject(rawValid);
+
+  assert(
+    normGame.valid === true && normDesk.valid === true,
+    "9.6.1 Both game.js and desktop.js normalizers validate valid draft payload"
+  );
+
+  assert(
+    JSON.stringify(normGame.save.pendingDraft) === JSON.stringify(normDesk.save.pendingDraft),
+    "9.6.2 pendingDraft normalization is byte-for-byte symmetric across game.js and desktop.js"
+  );
+
+  // Sanitize unrecognized cards in pendingDraft
+  const rawWithCorruptChoices = {
+    ...rawValid,
+    pendingDraft: {
+      choices: ["stomping_ground", "fake_nonexistent_card_xyz", "cultivate"],
+      encounterIdx: 1,
+      resolved: false
+    }
+  };
+
+  const sanitizedGame = normalizeCanonicalSave(rawWithCorruptChoices);
+  const sanitizedDesk = DesktopBridge.normalizeSaveObject(rawWithCorruptChoices);
+
+  assert(
+    sanitizedGame.save.pendingDraft.choices.length === 2 &&
+    !sanitizedGame.save.pendingDraft.choices.includes("fake_nonexistent_card_xyz") &&
+    JSON.stringify(sanitizedGame.save.pendingDraft) === JSON.stringify(sanitizedDesk.save.pendingDraft),
+    "9.6.3 Corrupt or unrecognized card IDs are filtered from pendingDraft choices symmetrically"
+  );
+
+  // 9.6.4: Backup envelope format preservation
+  const backupEnvelope = {
+    format: "manastorm-save-backup",
+    save: rawValid
+  };
+  const normBackup = DesktopBridge.normalizeSaveObject(backupEnvelope);
+  assert(
+    normBackup.valid === true &&
+    normBackup.save.pendingDraft &&
+    normBackup.save.pendingDraft.choices.length === 3,
+    "9.6.4 Backup envelope format preserves pendingDraft through DesktopBridge.normalizeSaveObject"
+  );
+
+  // 9.6.5: compareSaveFreshness checks draft resolution when timestamp and encounter match
+  const savePending = { savedAt: 1000, encounterIdx: 1, inShop: false, pendingDraft: { resolved: false } };
+  const saveResolved = { savedAt: 1000, encounterIdx: 1, inShop: false, pendingDraft: { resolved: true } };
+  assert(
+    DesktopBridge.compareSaveFreshness(saveResolved, savePending) > 0 &&
+    DesktopBridge.compareSaveFreshness(savePending, saveResolved) < 0,
+    "9.6.5 compareSaveFreshness prioritizes resolved draft over pending draft when timestamp/encounter match"
+  );
+}
+
+// --- 9.7: Edge Cases, Aliases & Robustness ---
+{
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+
+  // 9.7.1: Invalid inputs to isCardLegalForDeck return false
+  assert(
+    isCardLegalForDeck(null, new Set(["G"])) === false &&
+    isCardLegalForDeck(undefined, new Set(["G"])) === false &&
+    isCardLegalForDeck("", new Set(["G"])) === false &&
+    isCardLegalForDeck({}, new Set(["G"])) === false,
+    "9.7.1 isCardLegalForDeck gracefully handles null, undefined, empty string, and empty object"
+  );
+
+  // 9.7.2: state.pendingDraft.cards getter returns CARD_DB objects
+  state.encounterIdx = 0;
+  state.enemyLife = 0;
+  handleEncounterVictory();
+  assert(
+    Array.isArray(state.pendingDraft.cards) &&
+    state.pendingDraft.cards.length === 3 &&
+    Boolean(state.pendingDraft.cards[0].name) &&
+    Boolean(state.pendingDraft.cards[0].type),
+    "9.7.2 state.pendingDraft.cards getter returns array of fully populated CARD_DB card objects"
+  );
+
+  // 9.7.3: Selection by card ID string
+  const targetCardId = state.pendingDraft.choices[2];
+  const deckSizeBefore = state.masterDeck.length;
+  const pickedById = selectDraftCard(targetCardId);
+  assert(
+    pickedById === true &&
+    state.masterDeck.length === deckSizeBefore + 1 &&
+    state.masterDeck[state.masterDeck.length - 1].id === targetCardId,
+    "9.7.3 selectDraftCard supports selection via exact card ID string"
+  );
+
+  // 9.7.4: Cannot draft or skip when state.runOver = true
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+  state.encounterIdx = 0;
+  state.enemyLife = 0;
+  handleEncounterVictory();
+  state.runOver = true;
+  assert(
+    selectDraftCard(0) === false &&
+    skipDraft() === false,
+    "9.7.4 Both selectDraftCard and skipDraft are rejected when state.runOver is true"
+  );
+
+  // 9.7.5: generateDraftRewardPool alias works identically to sampleDraftPool
+  assert(
+    typeof generateDraftRewardPool === "function" &&
+    generateDraftRewardPool === sampleDraftPool,
+    "9.7.5 generateDraftRewardPool is exposed as alias to sampleDraftPool"
+  );
+}
+
 console.log(`\n========================================`);
 console.log(`ALL SUITES COMPLETE: ${passed} passed, ${failed} failed`);
 console.log(`========================================`);
