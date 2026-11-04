@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MANASTORM — MTG × Balatro Tactical Deckbuilder</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app" class="game-shell">
+    <!-- LEFT SIDEBAR: Run Status, Score Engine (Power × Resonance), Mana Pool, Zones -->
+    <aside class="hud-sidebar">
+      <div class="brand-banner">
+        <div class="brand-title">MANASTORM</div>
+        <div class="brand-subtitle">Tactical TCG Roguelike</div>
+      </div>
+
+      <!-- Current Encounter / Boss Banner -->
+      <section class="boss-panel" id="boss-panel">
+        <div class="plane-badge" id="plane-badge">PLANE 1 • SKIRMISH</div>
+        <h2 class="boss-name" id="boss-name">Garruk's Vanguard</h2>
+        <p class="boss-rule" id="boss-rule">Standard Rules — Break the enemy life total within 5 Turns.</p>
+        <div class="life-bar-wrap" title="Enemy Boss Life Total">
+          <div class="life-bar-ghost" id="enemy-life-ghost"></div>
+          <div class="life-bar-fill enemy-life-fill" id="enemy-life-bar"></div>
+          <div class="life-bar-proj" id="enemy-life-proj"></div>
+          <div class="life-bar-text">
+            <span>BOSS LIFE</span>
+            <strong id="enemy-life-text">78 / 78</strong>
+          </div>
+        </div>
+      </section>
+
+      <div class="ladder" id="encounter-ladder" aria-label="Run progress"></div>
+
+      <!-- Balatro × MTG Combat Math Box: Unblocked Power × Resonance -->
+      <section class="math-box" tabindex="0" aria-label="Combat Resonance Calculator (Hover or focus for source breakdown)">
+        <div class="math-header">COMBAT ENGINE <small class="math-hint">(Hover for breakdown)</small></div>
+        <div class="math-equation">
+          <div class="math-pill power-pill" title="Sum of Attacking Unblocked Creature Power + Burn">
+            <span class="math-label">POWER</span>
+            <span class="math-val" id="calc-power">0</span>
+          </div>
+          <span class="math-x">×</span>
+          <div class="math-pill mult-pill" title="Planeswalker Resonance (Multiplier)">
+            <span class="math-label">RESONANCE</span>
+            <span class="math-val" id="calc-mult">1</span>
+          </div>
+        </div>
+        <div class="math-preview">
+          <span>Projected Strike:</span>
+          <strong id="calc-total">0 DMG</strong>
+        </div>
+        <div class="math-preview threat-row">
+          <span>Enemy Retaliation:</span>
+          <strong id="calc-threat">0</strong>
+        </div>
+        <div class="math-breakdown-popover" id="math-breakdown-popover" role="region" aria-label="Power and Resonance Source Breakdown"></div>
+      </section>
+
+      <section class="synergy-box" id="synergy-box" aria-label="Active Synergies"></section>
+
+      <!-- Player Resources: Life, Turn Clock, Mana Pool, Gold -->
+      <section class="player-stats-panel">
+        <div class="stat-row">
+          <div class="stat-chip life-chip">
+            <span class="stat-label">YOUR LIFE</span>
+            <strong id="player-life">20 / 30</strong>
+          </div>
+          <div class="stat-chip turn-chip">
+            <span class="stat-label">TURN CLOCK</span>
+            <strong id="turn-counter">1 / 5</strong>
+          </div>
+          <div class="stat-chip gold-chip">
+            <span class="stat-label">GOLD</span>
+            <strong id="player-gold">$6</strong>
+          </div>
+        </div>
+
+        <div class="mana-pool-box">
+          <div class="mana-pool-header">
+            <span>MANA POOL</span>
+            <span class="land-drop-status" id="land-drop-status">Lands: 0/1</span>
+          </div>
+          <div class="mana-pips-row" id="mana-pool-display">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Deck / Graveyard / Starter Deck Controls -->
+      <section class="deck-zones-panel">
+        <button type="button" class="zone-btn" id="btn-view-library">
+          <span>📚 Library</span>
+          <strong id="library-count">33</strong>
+        </button>
+        <button type="button" class="zone-btn" id="btn-view-graveyard">
+          <span>🪦 Graveyard</span>
+          <strong id="graveyard-count">0</strong>
+        </button>
+        <button type="button" class="zone-btn" id="btn-new-run">
+          <span>🔄 New Run / Deck</span>
+        </button>
+      </section>
+    </aside>
+
+    <!-- MAIN ARENA: Command Zone, Enemy Board, Player Board, Mana Row, Hand -->
+    <main class="battlefield-main">
+      <section class="mobile-status-bar" aria-label="Current encounter and turn status">
+        <div class="mobile-status-boss">
+          <strong id="mobile-boss-name">Garruk's Vanguard</strong>
+          <span id="mobile-boss-life">78 / 78</span>
+        </div>
+        <div class="mobile-status-chip mobile-life-chip">
+          <span>YOUR LIFE</span>
+          <strong id="mobile-player-life">20 / 30</strong>
+        </div>
+        <div class="mobile-status-chip">
+          <span>TURN</span>
+          <strong id="mobile-turn-counter">1 / 5</strong>
+        </div>
+        <div class="mobile-status-chip">
+          <span>STRIKE</span>
+          <strong id="mobile-projected-damage">0 DMG</strong>
+        </div>
+      </section>
+
+      <!-- TOP BAR: Command Zone (5 Relic Slots - Balatro Jokers) + Consumables -->
+      <header class="command-zone-bar">
+        <div class="command-zone-wrap">
+          <div class="zone-title-row">
+            <span class="zone-label">COMMAND ZONE RELICS <small id="relic-count">(1/5)</small></span>
+            <span class="zone-hint">Use ◀ ▶ to reorder triggers or Sell for Gold</span>
+          </div>
+          <div class="relic-slots" id="relic-slots">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
+
+        <div class="consumable-zone-wrap">
+          <div class="zone-title-row">
+            <span class="zone-label">ARCANE SCROLLS <small id="consumable-count">(1/2)</small></span>
+            <span class="zone-hint">One-Shot Tactical Consumables</span>
+          </div>
+          <div class="consumable-slots" id="consumable-slots">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
+
+        <div class="phase-Action-bar">
+          <div class="phase-indicator" id="phase-indicator">MAIN PHASE</div>
+          <div class="action-buttons">
+            <button type="button" class="btn-secondary" id="btn-mulligan" title="Once per encounter on Turn 1 (before playing cards): Shuffle hand and redraw 7 cards (Shortcut: M)">
+              Free Mulligan (1)
+            </button>
+            <button type="button" class="btn-combat" id="btn-combat" title="Resolve your attack and enemy retaliation (Shortcut: Space)">
+              ⚔️ Resolve Attack & End Turn
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <!-- BATTLEFIELD TABLE -->
+      <section class="battlefield-table">
+        <!-- Enemy Creature Row (Blockers & Attackers) -->
+        <div class="board-lane enemy-lane">
+          <div class="lane-tag">ENEMY BATTLEFIELD <small>(Blockers assign left-to-right against your largest attackers)</small></div>
+          <div class="creature-row" id="enemy-creatures">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
+
+        <!-- Center Combat Log / Floating Trigger Ticker -->
+        <div class="combat-divider">
+          <div class="combat-log-strip" id="combat-log-strip" aria-live="polite">
+            Draw 7 cards from your 40-card deck. Play 1 Land per turn, summon Creatures, and trigger Command Zone Relics!
+          </div>
+        </div>
+
+        <!-- Player Creature Row -->
+        <div class="board-lane player-lane">
+          <div class="lane-tag">YOUR BATTLEFIELD <small>(Click a ready Creature to toggle Attack • Identical tokens stack)</small></div>
+          <div class="creature-row" id="player-creatures">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
+
+        <!-- Player Land & Mana Row -->
+        <div class="board-lane land-lane">
+          <div class="lane-tag">YOUR MANA BASE <small>(Click an untapped Land to tap for Mana • Auto-taps when casting)</small></div>
+          <div class="land-row" id="player-lands">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
+      </section>
+
+      <!-- PLAYER HAND -->
+      <footer class="hand-footer">
+        <div class="hand-header">
+          <span>YOUR HAND (<strong id="hand-count">7</strong>) — <small>Click or press <kbd>1</kbd>–<kbd>9</kbd> to play cards • <kbd>Space</kbd> to resolve turn</small></span>
+          <span class="hand-browse-hint" aria-hidden="true">↔ Swipe to browse</span>
+          <div class="archetype-badge" id="archetype-badge">Gruul Landfall & Stompy</div>
+        </div>
+        <div class="hand-row" id="player-hand">
+          <!-- Rendered by JS -->
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Enlarged Card Preview & Keyword Glossary Inspector -->
+  <aside id="card-hover-inspector" class="card-hover-inspector" aria-live="polite" hidden></aside>
+
+  <!-- Boss Intro Splash Overlay -->
+  <div id="boss-intro-splash" class="boss-intro-splash" aria-live="polite" hidden></div>
+
+  <!-- Floating Popups Container -->
+  <div id="fx-layer" class="fx-layer" popover="manual" aria-hidden="true"></div>
+
+  <!-- MODAL 1: Post-Battle Blind Eternities Shop & Card Enchanting -->
+  <dialog id="shop-dialog" closedby="none" aria-labelledby="shop-title">
+    <div class="modal-inner shop-modal">
+      <header class="modal-header">
+        <div>
+          <span class="plane-badge" id="shop-plane-badge">VICTORY • WARD SHATTERED</span>
+          <h2 id="shop-title">The Blind Eternities Sanctum</h2>
+        </div>
+        <div class="shop-gold-pill">Gold: <strong id="shop-gold">$10</strong></div>
+      </header>
+
+      <p class="shop-subtitle" id="shop-reward-summary">You earned $6 base reward + $2 unused turn bonus!</p>
+
+      <div class="shop-grid">
+        <!-- Column 1: Command Zone Relics for Sale -->
+        <div class="shop-section">
+          <h3>Command Zone Relics (Jokers)</h3>
+          <div class="shop-items" id="shop-relics"></div>
+        </div>
+
+        <!-- Column 2: Draft Single Cards into 40-Card Deck -->
+        <div class="shop-section">
+          <h3>Spell & Land Draft</h3>
+          <div class="shop-items" id="shop-cards"></div>
+        </div>
+
+        <!-- Column 3: Deck Sculpting (Foils, Runes, Exile & Arcane Scrolls) -->
+        <div class="shop-section">
+          <h3>Sanctum Enchanting & Scrolls</h3>
+          <div class="shop-items" id="shop-upgrades"></div>
+        </div>
+      </div>
+
+      <footer class="modal-footer">
+        <button type="button" class="btn-secondary" id="btn-reroll-shop">🔄 Reroll Stock ($2)</button>
+        <button type="button" class="btn-combat" id="btn-next-encounter" autofocus>➡️ Enter Next Encounter</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <!-- MODAL 2: Library / Graveyard / Starter Deck Selector -->
+  <dialog id="deck-dialog" closedby="any" aria-labelledby="deck-dialog-title">
+    <div class="modal-inner deck-modal">
+      <header class="modal-header">
+        <h2 id="deck-dialog-title">Deck Inspector</h2>
+        <form method="dialog">
+          <button type="submit" class="btn-close" autofocus>✕ Close</button>
+        </form>
+      </header>
+      <p class="deck-modal-desc" id="deck-dialog-desc"></p>
+      <div class="deck-card-grid" id="deck-dialog-grid"></div>
+    </div>
+  </dialog>
+
+  <!-- MODAL 3: New Run / Starter Guild Choice -->
+  <dialog id="newrun-dialog" closedby="any" aria-labelledby="newrun-title">
+    <div class="modal-inner newrun-modal">
+      <header class="modal-header">
+        <h2 id="newrun-title">Choose Your Planeswalker Deck (40 Cards)</h2>
+        <form method="dialog" id="newrun-close-form">
+          <button type="submit" class="btn-close">✕ Close</button>
+        </form>
+      </header>
+      <p class="deck-modal-desc" id="newrun-desc">Each 40-card deck mixes 17 Lands (including Fetch Lands) and 23 Spells, plus 1 starting Command Zone Relic.</p>
+      <div class="starter-decks-grid" id="starter-decks-grid"></div>
+    </div>
+  </dialog>
+
+  <!-- MODAL 4: Fetch Land / Dual Land Color Picker -->
+  <dialog id="color-dialog" closedby="none" aria-labelledby="color-dialog-title">
+    <div class="modal-inner color-modal">
+      <header class="modal-header">
+        <h2 id="color-dialog-title">Choose Mana / Land Color</h2>
+        <form method="dialog" id="color-dialog-close-form">
+          <button type="submit" class="btn-close" id="btn-close-color-dialog">✕</button>
+        </form>
+      </header>
+      <p class="deck-modal-desc" id="color-dialog-desc">Select which Land or Mana color to produce:</p>
+      <div class="color-choice-row" id="color-choice-row"></div>
+    </div>
+  </dialog>
+
+  <!-- MODAL 5: Interactive Target / Card Picker (Bolt, Battle Rage, Reanimate, Tutor) -->
+  <dialog id="target-dialog" closedby="any" aria-labelledby="target-dialog-title">
+    <div class="modal-inner target-modal">
+      <header class="modal-header">
+        <h2 id="target-dialog-title">Choose Target</h2>
+        <button type="button" class="btn-combat" id="btn-target-auto" autofocus>⚡ Auto-Pick Best Target</button>
+      </header>
+      <p class="deck-modal-desc" id="target-dialog-desc">Click a target below or press Enter to auto-pick the strongest option:</p>
+      <div class="deck-card-grid" id="target-dialog-grid"></div>
+    </div>
+  </dialog>
+
+  <!-- MODAL 6: Plane 2 Final Boss Victory Screen -->
+  <dialog id="victory-dialog" closedby="none" aria-labelledby="victory-title">
+    <div class="modal-inner victory-modal">
+      <header class="modal-header">
+        <div>
+          <span class="plane-badge">PLANE 2 CONQUERED • MULTIVERSE SAVED</span>
+          <h2 id="victory-title">🏆 Planeswalker Ascendant!</h2>
+        </div>
+      </header>
+      <p class="deck-modal-desc" id="victory-summary">You shattered Elesh Norn, Grand Cenobite and conquered the Blind Eternities!</p>
+      <div class="victory-stats-grid" id="victory-stats"></div>
+      <footer class="modal-footer">
+        <button type="button" class="btn-secondary" id="btn-victory-newrun">🔄 Start a Fresh Run</button>
+        <button type="button" class="btn-combat" id="btn-endless-continue" autofocus>♾️ Enter Endless Loop (2.5× Boss HP)</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <script src="data/cards.js"></script>
+  <script src="data/relics.js"></script>
+  <script src="mana.js"></script>
+  <script src="combat.js"></script>
+  <script src="ui.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
