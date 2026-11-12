@@ -37,3 +37,13 @@ dist/
 dist-macos/
 src-tauri/target/
 src-tauri/gen/
+
+# Python Virtual Environments, Bytecode & Testing
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+build/
+

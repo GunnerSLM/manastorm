@@ -172,6 +172,8 @@ function canPlayCard(card) {
   if (card.type === "Land") {
     return state.landsPlayedThisTurn < state.maxLandsPerTurn;
   }
+  const lifeCost = Math.max(0, Math.floor(Number(card.lifeCost) || 0));
+  if (lifeCost > 0 && state.playerLife <= lifeCost) return false;
   return findManaPaymentPlan(card.manaCost) !== null;
 }
 
@@ -183,6 +185,9 @@ function payManaForCard(card) {
     const land = state.playerLands.find(l => l.uid === uid);
     if (land) land.tapped = true;
   });
+  if (plan.landsToTap.length > 0 && typeof playSoundCue === "function") {
+    playSoundCue("manaTap");
+  }
   return true;
 }
 
@@ -198,6 +203,7 @@ function tapLandManually(landUid) {
     const col = options[0];
     land.tapped = true;
     state.manaPool[col] += 1;
+    if (typeof playSoundCue === "function") playSoundCue("manaTap");
     spawnFx(`+{${col}} Mana`, "#4bf099");
     renderAll();
   } else if (options.length > 1) {
@@ -210,6 +216,7 @@ function tapLandManually(landUid) {
         onSelect: () => {
           land.tapped = true;
           state.manaPool[col] += 1;
+          if (typeof playSoundCue === "function") playSoundCue("manaTap");
           spawnFx(`+{${col}} Mana`, "#4bf099");
           renderAll();
         }

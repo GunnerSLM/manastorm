@@ -3,6 +3,12 @@
 const SAVE_KEY = "manastorm_saved_run_v1";
 const SAVE_BACKUP_STORE_KEY = typeof SAVE_BACKUP_KEY !== "undefined" ? SAVE_BACKUP_KEY : "manastorm_saved_run_backup_v1";
 const SAVE_CORRUPT_STORE_KEY = typeof SAVE_CORRUPT_KEY !== "undefined" ? SAVE_CORRUPT_KEY : "manastorm_saved_run_corrupt_v1";
+const RUN_HISTORY_KEY = "manastorm_run_history_v1";
+const RUN_HISTORY_VERSION = 1;
+const MAX_RUN_HISTORY_ENTRIES = 25;
+const GAME_PROFILE_KEY = "manastorm_profile_v1";
+const GAME_PROFILE_VERSION = 1;
+const MAX_PROFILE_RUN_IDS = 100;
 
 function getSafeLocalStorage() {
   try {
@@ -38,6 +44,14 @@ const state = {
   enemyMaxLife: 30,
   playerLife: START_LIFE,
   gold: 6,
+  runSeed: null,
+  rngState: null,
+  runId: null,
+  runStartedAt: null,
+  runHistoryRecorded: false,
+  runTurns: 0,
+  runHistoryError: null,
+  profileError: null,
 
   turn: 1,
   maxTurns: 5,
@@ -56,6 +70,8 @@ const state = {
   shopStock: { relics: [], cards: [], upgrades: [] },
   turnStats: { spells: 0, landfalls: 0, graveTriggers: 0 },
   synTiers: {},
+  challengeId: "standard",
+  campaignId: DEFAULT_CAMPAIGN_ID,
   route: null,
   pendingDraft: null,
   lastSaveError: null
@@ -66,9 +82,367 @@ function nextUid() {
   return `uid_${uidCounter++}`;
 }
 
+function createRunId() {
+  return `run-${Date.now().toString(36)}-${nextUid()}`;
+}
+
+function normalizeRunHistoryRecord(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  if (
+    typeof raw.runId !== "string" ||
+    raw.runId.length === 0 ||
+    !["victory", "defeat"].includes(raw.outcome) ||
+    typeof raw.deckId !== "string" ||
+    typeof raw.deckName !== "string" ||
+    typeof raw.finalEncounter !== "string" ||
+    !Array.isArray(raw.routeNodeIds) ||
+    !Array.isArray(raw.relicIds)
+  ) {
+    return null;
+  }
+
+  const completedAt = Number(raw.completedAt);
+  const startedAt = Number(raw.startedAt);
+  const turns = Number(raw.turns);
+  const life = Number(raw.life);
+  const gold = Number(raw.gold);
+  const loop = Number(raw.loop);
+  if (
+    !Number.isFinite(completedAt) || completedAt <= 0 ||
+    !Number.isFinite(startedAt) || startedAt <= 0 ||
+    !Number.isInteger(turns) || turns < 0 ||
+    !Number.isFinite(life) || life < 0 ||
+    !Number.isFinite(gold) || gold < 0 ||
+    !Number.isInteger(loop) || loop < 0
+  ) {
+    return null;
+  }
+
+  const routeNodeIds = raw.routeNodeIds
+    .filter(id => typeof id === "string" && id.length > 0 && id.length <= 100)
+    .slice(0, 32);
+  const relicIds = raw.relicIds
+    .filter(id => typeof id === "string" && id.length > 0 && id.length <= 100)
+    .slice(0, 20);
+  const runSeed = normalizeRunSeed(raw.runSeed);
+  return {
+    runId: raw.runId.slice(0, 120),
+    startedAt,
+    completedAt,
+    outcome: raw.outcome,
+    deckId: raw.deckId.slice(0, 100),
+    deckName: raw.deckName.slice(0, 160),
+    campaignId: normalizeCampaignId(raw.campaignId),
+    challengeId: normalizeRunChallengeId(raw.challengeId),
+    runSeed,
+    finalEncounter: raw.finalEncounter.slice(0, 160),
+    routeNodeIds,
+    relicIds,
+    turns,
+    life,
+    gold,
+    loop
+  };
+}
+
+function readRunHistory() {
+  const storage = getSafeLocalStorage();
+  if (!storage || typeof storage.getItem !== "function") {
+    return { ok: false, entries: [], error: "Run history storage is unavailable." };
+  }
+
+  let serialized;
+  try {
+    serialized = storage.getItem(RUN_HISTORY_KEY);
+  } catch (error) {
+    return { ok: false, entries: [], error: `Unable to read run history: ${error?.message || error}` };
+  }
+  if (serialized === null || serialized === undefined || serialized === "") {
+    return { ok: true, entries: [] };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch (error) {
+    return { ok: false, entries: [], error: `Run history data is corrupt: ${error?.message || error}` };
+  }
+  if (!parsed || typeof parsed !== "object" || parsed.version !== RUN_HISTORY_VERSION || !Array.isArray(parsed.entries)) {
+    return { ok: false, entries: [], error: "Run history has an unsupported or invalid format." };
+  }
+
+  const entries = parsed.entries.map(normalizeRunHistoryRecord);
+  if (entries.some(entry => !entry)) {
+    return { ok: false, entries: [], error: "Run history contains an invalid entry; existing data was left unchanged." };
+  }
+  return { ok: true, entries: entries.slice(0, MAX_RUN_HISTORY_ENTRIES) };
+}
+
+function recordCompletedRun(outcome) {
+  if (!["victory", "defeat"].includes(outcome)) {
+    return { ok: false, error: `Unknown run outcome "${String(outcome)}".` };
+  }
+  if (state.runHistoryRecorded) return { ok: true, duplicate: true };
+  if (!state.runId) state.runId = createRunId();
+  if (!Number.isFinite(Number(state.runStartedAt)) || Number(state.runStartedAt) <= 0) {
+    state.runStartedAt = Date.now();
+  }
+
+  const currentHistory = readRunHistory();
+  if (!currentHistory.ok) {
+    state.runHistoryError = currentHistory.error;
+    return { ok: false, error: currentHistory.error };
+  }
+  if (currentHistory.entries.some(entry => entry.runId === state.runId)) {
+    state.runHistoryRecorded = true;
+    state.runHistoryError = null;
+    return { ok: true, duplicate: true };
+  }
+
+  const campaign = getActiveCampaign();
+  const encounter = getCurrentEncounter();
+  const route = ensureRouteState();
+  const record = normalizeRunHistoryRecord({
+    runId: state.runId,
+    startedAt: state.runStartedAt,
+    completedAt: Date.now(),
+    outcome,
+    deckId: state.deckArchetype?.id || STARTER_DECKS[0].id,
+    deckName: state.deckArchetype?.name || STARTER_DECKS[0].name,
+    campaignId: getActiveCampaignId(),
+    challengeId: state.challengeId,
+    runSeed: state.runSeed,
+    finalEncounter: encounter ? encounter.name : "Unknown Encounter",
+    routeNodeIds: route.visitedNodeIds,
+    relicIds: state.relics.map(relic => relic.id),
+    turns: state.runTurns,
+    life: state.playerLife,
+    gold: state.gold,
+    loop: route.loop || 0,
+    campaignName: campaign?.name
+  });
+  if (!record) {
+    state.runHistoryError = "Unable to create a valid run history record.";
+    return { ok: false, error: state.runHistoryError };
+  }
+
+  const nextHistory = {
+    version: RUN_HISTORY_VERSION,
+    entries: [record, ...currentHistory.entries].slice(0, MAX_RUN_HISTORY_ENTRIES)
+  };
+  const storage = getSafeLocalStorage();
+  try {
+    if (!storage || typeof storage.setItem !== "function") {
+      throw new Error("Run history storage is unavailable.");
+    }
+    storage.setItem(RUN_HISTORY_KEY, JSON.stringify(nextHistory));
+  } catch (error) {
+    state.runHistoryError = `Unable to save run history: ${error?.message || error}`;
+    return { ok: false, error: state.runHistoryError };
+  }
+
+  state.runHistoryRecorded = true;
+  state.runHistoryError = null;
+  return { ok: true, record };
+}
+
+function getDefaultGameProfile() {
+  return {
+    version: GAME_PROFILE_VERSION,
+    unlockedStarterDeckIds: [...UNLOCKED_STARTER_DECK_IDS],
+    campaignClears: 0,
+    processedVictoryRunIds: []
+  };
+}
+
+function normalizeGameProfile(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, error: "Profile data is not an object." };
+  }
+
+  let campaignClears;
+  let savedDeckIds;
+  let processedRunIds;
+  let migrated = false;
+  if (
+    raw.version === 0 &&
+    Array.isArray(raw.unlockedDeckIds) &&
+    Number.isInteger(Number(raw.campaignWins)) &&
+    Number(raw.campaignWins) >= 0
+  ) {
+    campaignClears = Number(raw.campaignWins);
+    savedDeckIds = raw.unlockedDeckIds;
+    processedRunIds = [];
+    migrated = true;
+  } else if (raw.version === GAME_PROFILE_VERSION) {
+    campaignClears = Number(raw.campaignClears);
+    savedDeckIds = raw.unlockedStarterDeckIds;
+    processedRunIds = raw.processedVictoryRunIds;
+  } else {
+    return { ok: false, error: `Unsupported profile version "${String(raw.version)}".` };
+  }
+
+  if (
+    !Number.isInteger(campaignClears) ||
+    campaignClears < 0 ||
+    !Array.isArray(savedDeckIds) ||
+    !Array.isArray(processedRunIds)
+  ) {
+    return { ok: false, error: "Profile data contains invalid unlock progress." };
+  }
+
+  const unlocked = new Set(UNLOCKED_STARTER_DECK_IDS);
+  for (const id of savedDeckIds) {
+    if (typeof id === "string" && STARTER_DECKS.some(deck => deck.id === id)) {
+      unlocked.add(id);
+    }
+  }
+  for (const [deckId, requirement] of Object.entries(STARTER_DECK_UNLOCK_REQUIREMENTS)) {
+    if (campaignClears < requirement.campaignClears) unlocked.delete(deckId);
+    else unlocked.add(deckId);
+  }
+
+  return {
+    ok: true,
+    migrated,
+    profile: {
+      version: GAME_PROFILE_VERSION,
+      unlockedStarterDeckIds: [...unlocked],
+      campaignClears,
+      processedVictoryRunIds: processedRunIds
+        .filter(runId => typeof runId === "string" && runId.length > 0 && runId.length <= 120)
+        .slice(-MAX_PROFILE_RUN_IDS)
+    }
+  };
+}
+
+function readGameProfile() {
+  const storage = getSafeLocalStorage();
+  if (!storage || typeof storage.getItem !== "function") {
+    return { ok: false, profile: getDefaultGameProfile(), error: "Profile storage is unavailable." };
+  }
+
+  let serialized;
+  try {
+    serialized = storage.getItem(GAME_PROFILE_KEY);
+  } catch (error) {
+    return { ok: false, profile: getDefaultGameProfile(), error: `Unable to read profile: ${error?.message || error}` };
+  }
+  if (serialized === null || serialized === undefined || serialized === "") {
+    return { ok: true, profile: getDefaultGameProfile(), exists: false };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch (error) {
+    return { ok: false, profile: getDefaultGameProfile(), error: `Profile data is corrupt: ${error?.message || error}` };
+  }
+  const normalized = normalizeGameProfile(parsed);
+  if (!normalized.ok) {
+    return { ok: false, profile: getDefaultGameProfile(), error: normalized.error };
+  }
+  if (normalized.migrated) {
+    const saved = writeGameProfile(normalized.profile);
+    if (!saved.ok) {
+      return { ok: false, profile: normalized.profile, error: saved.error };
+    }
+  }
+  return { ok: true, profile: normalized.profile, exists: true, migrated: normalized.migrated === true };
+}
+
+function writeGameProfile(profile) {
+  const normalized = normalizeGameProfile(profile);
+  if (!normalized.ok) return normalized;
+  const storage = getSafeLocalStorage();
+  if (!storage || typeof storage.setItem !== "function") {
+    return { ok: false, error: "Profile storage is unavailable." };
+  }
+  try {
+    storage.setItem(GAME_PROFILE_KEY, JSON.stringify(normalized.profile));
+  } catch (error) {
+    return { ok: false, error: `Unable to save profile: ${error?.message || error}` };
+  }
+  return { ok: true, profile: normalized.profile };
+}
+
+function isStarterDeckUnlockedInProfile(deckId) {
+  const profile = readGameProfile();
+  return profile.ok && profile.profile.unlockedStarterDeckIds.includes(deckId);
+}
+
+function getStarterDeckProgressMessage() {
+  const result = readGameProfile();
+  if (!result.ok) {
+    return `Persistent unlocks are unavailable: ${result.error} Locked decks remain unavailable.`;
+  }
+  if (state.profileError) {
+    return `Profile progress could not be saved: ${state.profileError}`;
+  }
+  const lockedDeck = Object.entries(STARTER_DECK_UNLOCK_REQUIREMENTS)
+    .find(([deckId]) => !result.profile.unlockedStarterDeckIds.includes(deckId));
+  if (!lockedDeck) {
+    return `${result.profile.campaignClears} campaign clear${result.profile.campaignClears === 1 ? "" : "s"} recorded. All starter decks unlocked.`;
+  }
+  const [deckId, requirement] = lockedDeck;
+  const progress = Math.min(result.profile.campaignClears, requirement.campaignClears);
+  const deck = STARTER_DECKS.find(item => item.id === deckId);
+  return `Campaign clears: ${progress}/${requirement.campaignClears} — ${requirement.description} to unlock ${deck?.name || deckId}.`;
+}
+
+function recordCampaignClear(runId = state.runId) {
+  const existing = readGameProfile();
+  if (!existing.ok) {
+    if (state.headless && existing.error === "Profile storage is unavailable.") {
+      return { ok: true, skipped: true };
+    }
+    state.profileError = existing.error;
+    return { ok: false, error: existing.error };
+  }
+  if (runId && existing.profile.processedVictoryRunIds.includes(runId)) {
+    state.profileError = null;
+    return { ok: true, duplicate: true };
+  }
+
+  const nextProfile = {
+    ...existing.profile,
+    campaignClears: existing.profile.campaignClears + 1,
+    processedVictoryRunIds: [
+      ...existing.profile.processedVictoryRunIds,
+      ...(runId ? [runId] : [])
+    ].slice(-MAX_PROFILE_RUN_IDS)
+  };
+  let newlyUnlockedDeckId = null;
+  for (const [deckId, requirement] of Object.entries(STARTER_DECK_UNLOCK_REQUIREMENTS)) {
+    if (
+      nextProfile.campaignClears >= requirement.campaignClears &&
+      !nextProfile.unlockedStarterDeckIds.includes(deckId)
+    ) {
+      nextProfile.unlockedStarterDeckIds.push(deckId);
+      newlyUnlockedDeckId = newlyUnlockedDeckId || deckId;
+    }
+  }
+
+  const saved = writeGameProfile(nextProfile);
+  if (!saved.ok) {
+    state.profileError = saved.error;
+    return { ok: false, error: saved.error };
+  }
+  state.profileError = null;
+  return { ok: true, newlyUnlockedDeckId };
+}
+
+function recordCombatEvent(type, message, details = {}) {
+  if (typeof emitCombatLogEvent === "function") {
+    return emitCombatLogEvent(type, message, details);
+  }
+  return null;
+}
+
 function addResonance(amount, label = "Trigger") {
   if (!amount) return;
   state.turnResonance += amount;
+  recordCombatEvent("trigger", `${label}: +${amount} resonance`, { label, amount, resource: "resonance" });
   if (!state.resonanceSources) {
     state.resonanceSources = [{ label: "Base Resonance", amount: 1, type: "add" }];
   }
@@ -87,6 +461,12 @@ function multiplyTurnResonance(factor, label = "Foil") {
   const before = state.turnResonance;
   state.turnResonance = Math.round(state.turnResonance * factor);
   const delta = state.turnResonance - before;
+  recordCombatEvent("trigger", `${label}: resonance ×${factor} (${delta >= 0 ? "+" : ""}${delta})`, {
+    label,
+    factor,
+    delta,
+    resource: "resonance"
+  });
   if (!state.resonanceSources) {
     state.resonanceSources = [{ label: "Base Resonance", amount: 1, type: "add" }];
   }
@@ -99,6 +479,7 @@ function multiplyTurnResonance(factor, label = "Foil") {
 function addBurnPower(amount, label = "Burn") {
   if (!amount) return;
   state.turnBurnPower += amount;
+  recordCombatEvent("trigger", `${label}: +${amount} burn power`, { label, amount, resource: "burn" });
   if (!state.burnSources) state.burnSources = [];
   state.burnSources.push({ label, amount });
   if (typeof notifyBurnTrigger === "function") {
@@ -111,6 +492,9 @@ function gainLife(amount, sourceLabel = "Heal") {
   const before = state.playerLife;
   state.playerLife = Math.min(MAX_LIFE, state.playerLife + amount);
   const actual = state.playerLife - before;
+  if (actual > 0) {
+    recordCombatEvent("trigger", `${sourceLabel}: restored ${actual} Life`, { sourceLabel, amount: actual, resource: "life" });
+  }
   if (actual > 0 && typeof notifyLifeChange === "function") {
     notifyLifeChange(actual, sourceLabel);
   }
@@ -146,8 +530,81 @@ function millCards(count) {
   return milled;
 }
 
+const GENERATED_CARD_VERSION = 1;
+const GENERATED_CARD_KEYWORDS = ["Deathtouch", "Flying", "Haste", "Lifelink", "Trample"];
+const GENERATED_CARD_NAMES = ["Ashen", "Dawn", "Ember", "Moss", "Rift", "Storm", "Thorn", "Verdant"];
+const GENERATED_CARD_SUBTYPES = ["Beast", "Elemental", "Knight", "Rogue", "Scout", "Warrior"];
+const GENERATED_CARD_COLORS = [...COLORS, "C"];
+
+function generatedRandom(seed) {
+  let value = seed >>> 0;
+  return () => {
+    value = (value + 0x6D2B79F5) >>> 0;
+    let t = value;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function createGeneratedCreatureCard(seed, deckColors = COLORS) {
+  const safeSeed = Number(seed) >>> 0;
+  const sourceColors = deckColors instanceof Set ? [...deckColors] : deckColors;
+  if (!Array.isArray(sourceColors)) return null;
+  const colors = sourceColors.filter(color => GENERATED_CARD_COLORS.includes(color));
+  if (!Number.isInteger(Number(seed)) || colors.length === 0) return null;
+
+  const rng = generatedRandom(safeSeed);
+  const choose = list => list[Math.floor(rng() * list.length)];
+  const color = choose([...new Set(colors)]);
+  const manaValue = 1 + Math.floor(rng() * 3);
+  const keyword = choose(GENERATED_CARD_KEYWORDS);
+  const keywordCost = keyword === "Flying" || keyword === "Deathtouch" || keyword === "Lifelink" ? 1 : 0;
+  const totalStats = Math.max(2, manaValue * 2 + 1 - keywordCost);
+  const power = 1 + Math.floor(rng() * Math.max(1, totalStats - 1));
+  const toughness = Math.max(1, totalStats - power);
+  const prefix = choose(GENERATED_CARD_NAMES);
+  const subtype = choose(GENERATED_CARD_SUBTYPES);
+
+  return {
+    id: `generated_${safeSeed.toString(36)}`,
+    name: `${prefix} ${subtype}`,
+    type: "Creature",
+    subtype,
+    color,
+    manaCost: manaValue === 1 ? `{${color}}` : `{${manaValue - 1}}{${color}}`,
+    power,
+    toughness,
+    keywords: [keyword],
+    rules: `${keyword}.`,
+    produces: [],
+    generated: true,
+    generatedVersion: GENERATED_CARD_VERSION,
+    generatedSeed: safeSeed
+  };
+}
+
+function normalizeGeneratedCardDefinition(raw) {
+  if (!raw || typeof raw !== "object" || raw.generated !== true) return null;
+  const generated = createGeneratedCreatureCard(raw.generatedSeed, [raw.color]);
+  if (!generated || raw.generatedVersion !== GENERATED_CARD_VERSION || raw.id !== generated.id) return null;
+  const fields = ["name", "type", "subtype", "color", "manaCost", "power", "toughness", "rules"];
+  if (fields.some(field => raw[field] !== generated[field])) return null;
+  if (!Array.isArray(raw.keywords) || raw.keywords.length !== 1 || raw.keywords[0] !== generated.keywords[0]) return null;
+  return generated;
+}
+
+function getGeneratedCardDefinition(card) {
+  if (!card || card.generated !== true) return null;
+  const definition = createGeneratedCreatureCard(card.generatedSeed, [card.color]);
+  return definition && definition.id === card.id ? definition : null;
+}
+
 function cloneCard(cardId) {
-  const base = CARD_DB[cardId];
+  const base = typeof cardId === "object" && cardId
+    ? normalizeGeneratedCardDefinition(cardId) || CARD_DB[cardId.id]
+    : CARD_DB[cardId];
+  if (!base) return null;
   return {
     ...base,
     uid: nextUid(),
@@ -180,52 +637,140 @@ function creatureToCard(creature) {
   };
 }
 
+const MAX_RUN_SEED_LENGTH = 64;
+
+function normalizeRunSeed(seed) {
+  if (seed === null || seed === undefined) return null;
+  const normalized = String(seed).trim();
+  return normalized.length > 0 && normalized.length <= MAX_RUN_SEED_LENGTH ? normalized : null;
+}
+
+function isValidRunSeedInput(seed) {
+  return seed === null || seed === undefined || String(seed).trim().length === 0 ||
+    normalizeRunSeed(seed) !== null;
+}
+
+function hashRunSeed(seed) {
+  const text = String(seed);
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash || 0x6d2b79f5;
+}
+
+function normalizeSavedRngState(seed, rngState) {
+  const normalizedSeed = normalizeRunSeed(seed);
+  if (!normalizedSeed) return null;
+  const numericState = Number(rngState);
+  return Number.isInteger(numericState) && numericState > 0 && numericState <= 0xffffffff
+    ? numericState >>> 0
+    : hashRunSeed(normalizedSeed);
+}
+
+function getDailyRunSeed(today = new Date()) {
+  const date = today instanceof Date ? today : new Date(today);
+  if (!Number.isFinite(date.getTime())) return null;
+  return `daily-${date.toISOString().slice(0, 10)}`;
+}
+
+function gameRandom() {
+  if (!state.runSeed) return Math.random();
+  let value = normalizeSavedRngState(state.runSeed, state.rngState);
+  value ^= value << 13;
+  value ^= value >>> 17;
+  value ^= value << 5;
+  state.rngState = value >>> 0;
+  return state.rngState / 0x100000000;
+}
+
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(gameRandom() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
 }
 
 // === INITIALIZATION & RUN START ===
-function createInitialRouteState(loop = 0) {
-  const startNode = (typeof CAMPAIGN_ROUTE_NODES !== "undefined" && CAMPAIGN_ROUTE_NODES[0])
-    ? CAMPAIGN_ROUTE_NODES[0]
+function getActiveCampaignId() {
+  return typeof normalizeCampaignId === "function"
+    ? normalizeCampaignId(state.campaignId)
+    : DEFAULT_CAMPAIGN_ID;
+}
+
+function getActiveCampaign() {
+  return typeof getCampaignById === "function" ? getCampaignById(getActiveCampaignId()) : null;
+}
+
+function getActiveCampaignEncounters() {
+  return typeof getCampaignEncounters === "function"
+    ? getCampaignEncounters(getActiveCampaignId())
+    : ENCOUNTERS;
+}
+
+function getActiveCampaignRouteNodes() {
+  return typeof getCampaignRouteNodes === "function"
+    ? getCampaignRouteNodes(getActiveCampaignId())
+    : CAMPAIGN_ROUTE_NODES;
+}
+
+function createInitialRouteState(loop = 0, campaignId = getActiveCampaignId()) {
+  const routeNodes = typeof getCampaignRouteNodes === "function"
+    ? getCampaignRouteNodes(campaignId)
+    : CAMPAIGN_ROUTE_NODES;
+  const startNode = routeNodes && routeNodes[0]
+    ? routeNodes[0]
     : { id: "p1_start" };
   return {
     loop: Math.max(0, Math.floor(Number(loop) || 0)),
     currentNodeId: startNode.id,
     completedNodeIds: [],
     visitedNodeIds: [startNode.id],
+    pendingEventId: null,
     pendingSelection: false,
     lastActivitySummary: null
   };
 }
 
 function getRouteNodeById(nodeId) {
-  if (!nodeId || typeof CAMPAIGN_ROUTE_NODES === "undefined" || !Array.isArray(CAMPAIGN_ROUTE_NODES)) {
+  const routeNodes = getActiveCampaignRouteNodes();
+  if (!nodeId || !Array.isArray(routeNodes)) {
     return null;
   }
-  return CAMPAIGN_ROUTE_NODES.find(n => n.id === nodeId) || null;
+  return routeNodes.find(n => n.id === nodeId) || null;
 }
 
 function ensureRouteState() {
   if (!state.route || typeof state.route !== "object" || !getRouteNodeById(state.route.currentNodeId)) {
-    state.route = createInitialRouteState(Math.floor((Number(state.encounterIdx) || 0) / ENCOUNTERS.length));
+    const encounters = getActiveCampaignEncounters();
+    state.route = createInitialRouteState(
+      Math.floor((Number(state.encounterIdx) || 0) / encounters.length),
+      getActiveCampaignId()
+    );
   }
   if (!Array.isArray(state.route.completedNodeIds)) state.route.completedNodeIds = [];
   if (!Array.isArray(state.route.visitedNodeIds)) state.route.visitedNodeIds = [state.route.currentNodeId];
+  const currentNode = getRouteNodeById(state.route.currentNodeId);
+  if (currentNode && currentNode.type === "event" && !state.route.completedNodeIds.includes(currentNode.id)) {
+    state.route.pendingEventId = currentNode.id;
+  } else {
+    state.route.pendingEventId = null;
+  }
   return state.route;
 }
 
 function getCurrentRouteNode() {
   const route = ensureRouteState();
-  return getRouteNodeById(route.currentNodeId) || (typeof CAMPAIGN_ROUTE_NODES !== "undefined" ? CAMPAIGN_ROUTE_NODES[0] : null);
+  const routeNodes = getActiveCampaignRouteNodes();
+  return getRouteNodeById(route.currentNodeId) || (Array.isArray(routeNodes) ? routeNodes[0] : null);
 }
 
 function completeCurrentRouteNode() {
   const route = ensureRouteState();
+  const current = getCurrentRouteNode();
+  if (current && current.type === "event" && route.pendingEventId === current.id) return false;
   if (!route.completedNodeIds.includes(route.currentNodeId)) {
     route.completedNodeIds.push(route.currentNodeId);
     return true;
@@ -253,8 +798,17 @@ function canSelectRouteNode(nodeId) {
 
 function resolveNonCombatRouteNode(node) {
   const route = ensureRouteState();
+  if (!node || getRouteNodeById(node.id) !== node) {
+    return { ok: false, reason: "invalid_node" };
+  }
   if (route.completedNodeIds.includes(node.id)) {
     return { ok: false, reason: "already_completed" };
+  }
+  if (route.currentNodeId !== node.id) {
+    return { ok: false, reason: "not_current" };
+  }
+  if (node.type === "event") {
+    return { ok: false, reason: "event_requires_choice" };
   }
 
   let healed = 0;
@@ -282,7 +836,7 @@ function resolveNonCombatRouteNode(node) {
   }
   if (node.grantScroll) {
     if (state.consumables.length < 2 && CONSUMABLE_DB.length > 0) {
-      const def = CONSUMABLE_DB[Math.floor(Math.random() * CONSUMABLE_DB.length)];
+      const def = CONSUMABLE_DB[Math.floor(gameRandom() * CONSUMABLE_DB.length)];
       state.consumables.push({ ...def, uid: nextUid() });
       scrollGrantedName = def.name;
     } else {
@@ -335,7 +889,7 @@ function selectRouteNode(nodeId) {
   }
   route.pendingSelection = false;
 
-  const loopOffset = (route.loop || 0) * ENCOUNTERS.length;
+  const loopOffset = (route.loop || 0) * getActiveCampaignEncounters().length;
   if (typeof node.encounterIdx === "number") {
     state.encounterIdx = loopOffset + node.encounterIdx;
   }
@@ -347,24 +901,156 @@ function selectRouteNode(nodeId) {
     return true;
   }
 
+  if (node.type === "event") {
+    route.pendingEventId = node.id;
+    route.lastActivitySummary = null;
+    saveRunState(false);
+    return true;
+  }
+
   resolveNonCombatRouteNode(node);
   return true;
 }
 
+function getRouteEventChoiceStatus(choiceId) {
+  const route = ensureRouteState();
+  const node = getRouteNodeById(route.pendingEventId);
+  if (!node || node.type !== "event" || node.id !== route.currentNodeId) {
+    return { available: false, reason: "No Planar Event choice is pending.", choice: null };
+  }
+  if (route.completedNodeIds.includes(node.id)) {
+    return { available: false, reason: "This Planar Event has already been resolved.", choice: null };
+  }
+
+  const choice = Array.isArray(node.choices) ? node.choices.find(item => item.id === choiceId) : null;
+  if (!choice) {
+    return { available: false, reason: "That Planar Event choice is unavailable.", choice: null };
+  }
+
+  const requirements = choice.requires || {};
+  if (typeof requirements.lifeAbove === "number" && state.playerLife <= requirements.lifeAbove) {
+    return {
+      available: false,
+      reason: `Requires more than ${requirements.lifeAbove} Life.`,
+      choice
+    };
+  }
+  if (typeof requirements.minGold === "number" && state.gold < requirements.minGold) {
+    return {
+      available: false,
+      reason: `Requires at least $${requirements.minGold} Gold.`,
+      choice
+    };
+  }
+  if (requirements.missingLife && state.playerLife >= MAX_LIFE) {
+    return { available: false, reason: "Already at maximum Life.", choice };
+  }
+  return { available: true, reason: null, choice };
+}
+
+function resolveRouteEventChoice(eventId, choiceId) {
+  const route = ensureRouteState();
+  if (route.pendingEventId !== eventId || route.currentNodeId !== eventId) {
+    return { ok: false, reason: "event_not_pending" };
+  }
+
+  const status = getRouteEventChoiceStatus(choiceId);
+  if (!status.available) return { ok: false, reason: status.reason, choice: status.choice };
+
+  const node = getRouteNodeById(eventId);
+  const choice = status.choice;
+  if (!node || !choice || route.completedNodeIds.includes(node.id)) {
+    return { ok: false, reason: "already_resolved" };
+  }
+
+  if (choice.effect === "life_for_gold") {
+    state.playerLife -= choice.lifeCost;
+    state.gold += choice.goldGain;
+  } else if (choice.effect === "gold_for_life") {
+    state.gold -= choice.goldCost;
+    gainLife(choice.healAmount, node.title);
+  } else if (choice.effect !== "leave") {
+    return { ok: false, reason: "unsupported_effect" };
+  }
+
+  route.completedNodeIds.push(node.id);
+  route.pendingEventId = null;
+  route.pendingSelection = Boolean(node.next && node.next.length > 0);
+  const summaryText = choice.effect === "life_for_gold"
+    ? `-${choice.lifeCost} Life, +$${choice.goldGain} Gold`
+    : (choice.effect === "gold_for_life"
+      ? `-$${choice.goldCost} Gold, restored up to +${choice.healAmount} Life`
+      : "No reward or cost");
+  route.lastActivitySummary = `${node.title} — ${choice.title}: ${summaryText}`;
+
+  saveRunState(false);
+  renderAll();
+  setLog(`${node.title}: ${choice.title} (${summaryText}). Choose your next stop on the Planar Route.`);
+  spawnFx(`${choice.title}: ${summaryText}`, choice.effect === "life_for_gold" ? "#ffbe3b" : "#26d07c");
+  return { ok: true, node, choice, summaryText };
+}
+
 function advanceToNextLoopRoute() {
+  const encounterCount = getActiveCampaignEncounters().length;
   const currentLoop = state.route && typeof state.route.loop === "number"
     ? state.route.loop + 1
-    : Math.floor(state.encounterIdx / ENCOUNTERS.length) + 1;
-  state.route = createInitialRouteState(currentLoop);
-  state.encounterIdx = currentLoop * ENCOUNTERS.length;
+    : Math.floor(state.encounterIdx / encounterCount) + 1;
+  state.route = createInitialRouteState(currentLoop, getActiveCampaignId());
+  state.encounterIdx = currentLoop * encounterCount;
+  state.runId = createRunId();
+  state.runStartedAt = Date.now();
+  state.runHistoryRecorded = false;
+  state.runTurns = 0;
+  state.runHistoryError = null;
   beginEncounter();
   saveRunState(false);
 }
 
-function startNewRun(deckConfig = STARTER_DECKS[0]) {
+function startNewRun(
+  deckConfig = STARTER_DECKS[0],
+  challengeId = "standard",
+  campaignId = DEFAULT_CAMPAIGN_ID,
+  seed = null,
+  options = {}
+) {
+  const knownDeck = STARTER_DECKS.find(deck => deck.id === deckConfig?.id);
+  if (!knownDeck) {
+    setLog("Unable to start run: unknown starter deck.");
+    return false;
+  }
+  if (!isStarterDeckAvailable(knownDeck.id) && options?.allowLockedDeck !== true) {
+    setLog(`Unable to start run: ${knownDeck.name} is locked. ${STARTER_DECK_UNLOCK_REQUIREMENTS[knownDeck.id]?.description || "Unlock it first"}.`);
+    return false;
+  }
+  deckConfig = knownDeck;
+  const challenge = RUN_CHALLENGES.find(item => item.id === challengeId);
+  if (!challenge) {
+    setLog(`Unable to start run: unknown challenge "${String(challengeId)}".`);
+    return false;
+  }
+  const campaign = CAMPAIGN_DEFINITIONS.find(item => item.id === campaignId);
+  if (!campaign) {
+    setLog(`Unable to start run: unknown campaign "${String(campaignId)}".`);
+    return false;
+  }
+  if (!isValidRunSeedInput(seed)) {
+    setLog(`Unable to start run: seed must be at most ${MAX_RUN_SEED_LENGTH} characters.`);
+    return false;
+  }
+
   state.runOver = false;
   state.combatLocked = false;
   state.deckArchetype = deckConfig;
+  state.challengeId = challenge.id;
+  state.campaignId = campaign.id;
+  state.runSeed = normalizeRunSeed(seed);
+  state.rngState = state.runSeed ? hashRunSeed(state.runSeed) : null;
+  state.runId = createRunId();
+  state.runStartedAt = Date.now();
+  state.runHistoryRecorded = false;
+  state.runTurns = 0;
+  state.runHistoryError = null;
+  state.profileError = null;
   state.masterDeck = deckConfig.cards.map(id => cloneCard(id));
   state.relics = [];
   const startRelic = RELIC_DB.find(r => r.id === deckConfig.startingRelic);
@@ -373,17 +1059,19 @@ function startNewRun(deckConfig = STARTER_DECKS[0]) {
 
   state.encounterIdx = 0;
   state.playerLife = START_LIFE;
-  state.gold = 6;
+  state.gold = 6 + challenge.startingGoldBonus;
   state.synTiers = {};
-  state.route = createInitialRouteState(0);
+  state.route = createInitialRouteState(0, campaign.id);
   state.pendingDraft = null;
 
   beginEncounter();
   saveRunState(false);
+  return true;
 }
 
 function getCurrentEncounter() {
-  return ENCOUNTERS[state.encounterIdx % ENCOUNTERS.length];
+  const encounters = getActiveCampaignEncounters();
+  return encounters[state.encounterIdx % encounters.length];
 }
 
 function beginEncounter() {
@@ -391,7 +1079,9 @@ function beginEncounter() {
   state.combatLocked = false;
   state.pendingDraft = null;
   const enc = getCurrentEncounter();
-  const loopScale = Math.pow(2.5, Math.floor(state.encounterIdx / ENCOUNTERS.length));
+  const challenge = getRunChallengeById(state.challengeId);
+  const encounters = getActiveCampaignEncounters();
+  const loopScale = Math.pow(2.5, Math.floor(state.encounterIdx / encounters.length));
   state.enemyMaxLife = Math.round(enc.maxLife * loopScale);
   state.enemyLife = state.enemyMaxLife;
 
@@ -403,10 +1093,16 @@ function beginEncounter() {
   state.enemyCreatures = [];
 
   state.turn = 1;
-  state.maxTurns = 5;
+  state.maxTurns = challenge.maxTurns;
   state.mulligansLeft = 1;
   state.canMulligan = true;
 
+  if (typeof resetCombatLogForEncounter === "function") resetCombatLogForEncounter();
+  recordCombatEvent("encounter", `Facing ${enc.name} on Plane ${enc.plane}.`, {
+    encounter: enc.name,
+    plane: enc.plane,
+    campaign: getActiveCampaignId()
+  });
   spawnEnemyWave(enc);
   drawOpeningHand(7);
   startPlayerTurn(true);
@@ -482,8 +1178,16 @@ function startPlayerTurn(isFirstTurn = false, prefixLog = "") {
 
   if (!isFirstTurn) {
     drawCards(1);
+    recordCombatEvent("turn", `Turn ${state.turn} begins; drew 1 card and untapped ${state.playerLands.length} Lands.`, {
+      turn: state.turn,
+      cardsDrawn: 1
+    });
     setLog(`${prefixLog}Turn ${state.turn}: Untapped ${state.playerLands.length} Lands and drew a card.`);
   } else {
+    recordCombatEvent("turn", `Turn ${state.turn} begins with ${state.hand.length} cards in hand.`, {
+      turn: state.turn,
+      cardsInHand: state.hand.length
+    });
     setLog(`Encounter started vs ${getCurrentEncounter().name}! Play Lands to match colored Mana Pips.`);
   }
 
@@ -498,14 +1202,22 @@ function playCardFromHand(cardUid) {
   const card = state.hand[idx];
 
   if (!canPlayCard(card)) {
-    if (card.type === "Land") {
-      spawnFx(`Land Limit (${state.maxLandsPerTurn}/turn)!`, "#ff6b6b");
-    } else {
-      spawnFx(`Missing Mana Pips for ${card.manaCost}!`, "#ff6b6b");
+    const reason = typeof getCardPlayabilityInfo === "function"
+      ? getCardPlayabilityInfo(card).reason.replace(/^Unplayable:\s*/, "")
+      : (card.type === "Land" ? `Land Limit (${state.maxLandsPerTurn}/turn)!` : `Missing Mana Pips for ${card.manaCost}!`);
+    if (typeof showLocalPlayabilityFeedback === "function") {
+      showLocalPlayabilityFeedback(card, reason);
     }
     return;
   }
 
+  if (typeof clearLocalPlayabilityFeedback === "function") clearLocalPlayabilityFeedback();
+  if (typeof playSoundCue === "function") playSoundCue("cardPlay");
+  recordCombatEvent("play", `${card.type === "Land" ? "Played" : "Cast"} ${card.name}.`, {
+    cardId: card.id,
+    cardName: card.name,
+    cardType: card.type
+  });
   state.canMulligan = false;
   state.hand.splice(idx, 1);
 
@@ -530,6 +1242,7 @@ function playCardFromHand(cardUid) {
   }
 
   renderAll();
+  if (typeof showCardPlayImpact === "function") showCardPlayImpact(card);
 }
 
 function handleLandPlay(landCard) {
@@ -604,6 +1317,11 @@ const LANDFALL_EFFECTS = {
     addResonance(1 * stackCount, "Lotus Cobra (Landfall)");
     spawnFx(`Cobra Landfall: +${stackCount} Any-Color Mana & Mult!`, "#2ecc71");
   },
+  briarback(c) {
+    c.tempPower = (c.tempPower || 0) + 2;
+    c.tempToughness = (c.tempToughness || 0) + 2;
+    spawnFx("Briarback Colossus Landfall: +2/+2!", "#2ecc71");
+  },
   scute(c) {
     const tokenMult = getTokenMultiplier();
     if (state.playerLands.length >= 4) {
@@ -616,11 +1334,21 @@ const LANDFALL_EFFECTS = {
   },
   baloth(c, stackCount) {
     spawnTokens("Beast Token", 4, 4, "G", ["Trample"], 1 * stackCount);
+  },
+  cartographer(c) {
+    c.tempPower = (c.tempPower || 0) + 1;
+    c.tempToughness = (c.tempToughness || 0) + 1;
+    drawCards(1);
+    spawnFx("Floodplain Cartographer Landfall: +1/+1 & Drew 1!", "#3498db");
   }
 };
 
 function triggerLandfall() {
   state.turnStats.landfalls++;
+  recordCombatEvent("trigger", `Landfall trigger ${state.turnStats.landfalls} resolved.`, {
+    trigger: "landfall",
+    count: state.turnStats.landfalls
+  });
   const snapshot = [...state.playerCreatures];
   snapshot.forEach(c => {
     const handler = c.landfall && LANDFALL_EFFECTS[c.landfall];
@@ -631,6 +1359,10 @@ function triggerLandfall() {
 }
 
 function handleCreatureCast(card) {
+  recordCombatEvent("trigger", `${card.name} entered the battlefield.`, {
+    cardId: card.id,
+    trigger: "creature_enter"
+  });
   const hasHaste = card.keywords.includes("Haste");
   const creatureObj = {
     uid: card.uid,
@@ -836,22 +1568,39 @@ const ETB_EFFECTS = {
   wayfinder() {
     const milled = millCards(3);
     addResonance(1, "Satyr Wayfinder");
-    let landIdx = -1;
-    for (let i = state.graveyard.length - 1; i >= 0; i--) {
-      if (state.graveyard[i].type === "Land") {
-        landIdx = i;
-        if (state.graveyard[i].isFetch || (state.graveyard[i].produces && state.graveyard[i].produces.length > 1)) {
-          break;
-        }
-      }
-    }
-    if (landIdx !== -1) {
-      const [recoveredLand] = state.graveyard.splice(landIdx, 1);
-      state.hand.push(recoveredLand);
+    const recoveredLand = recoverLandFromGraveyard();
+    if (recoveredLand) {
       spawnFx(`Wayfinder: Milled ${milled} & Recovered ${recoveredLand.name}!`, "#2ecc71");
     } else {
       spawnFx(`Satyr Wayfinder: Milled ${milled} & +1 Mult!`, "#2ecc71");
     }
+  },
+  mosswake() {
+    const milled = millCards(2);
+    const recoveredLand = recoverLandFromGraveyard();
+    addResonance(1, "Mosswake Forager");
+    spawnFx(
+      recoveredLand
+        ? `Mosswake Forager: Milled ${milled}, Recovered ${recoveredLand.name} & +1 Mult!`
+        : `Mosswake Forager: Milled ${milled} & +1 Mult!`,
+      "#2ecc71"
+    );
+  },
+  tideglass() {
+    const strongest = [...state.enemyCreatures].sort((a, b) => b.power - a.power)[0];
+    if (strongest) strongest.frozen = true;
+    drawCards(1);
+    spawnFx(
+      strongest
+        ? `Tideglass Sentry: Froze ${strongest.name} & Drew 1!`
+        : "Tideglass Sentry: No blocker to freeze; Drew 1!",
+      "#3498db"
+    );
+  },
+  dawnbell() {
+    gainLife(2, "Dawnbell Acolyte");
+    addResonance(1, "Dawnbell Acolyte");
+    spawnFx("Dawnbell Acolyte: +2 Life & +1 Mult!", "#ffe299");
   },
   fiend_artisan(creature) {
     const gyCreatures = state.graveyard.filter(c => c.type === "Creature").length;
@@ -899,6 +1648,22 @@ function triggerCreatureETB(creature) {
   }
 }
 
+function recoverLandFromGraveyard() {
+  let landIdx = -1;
+  for (let i = state.graveyard.length - 1; i >= 0; i--) {
+    if (state.graveyard[i].type === "Land") {
+      landIdx = i;
+      if (state.graveyard[i].isFetch || (state.graveyard[i].produces && state.graveyard[i].produces.length > 1)) {
+        break;
+      }
+    }
+  }
+  if (landIdx === -1) return null;
+  const [recoveredLand] = state.graveyard.splice(landIdx, 1);
+  state.hand.push(recoveredLand);
+  return recoveredLand;
+}
+
 const SPELL_EFFECTS = {
   cultivate() {
     promptFetchBasicLand(getTriggerMultiplier(), "Cultivate Ramp", 0);
@@ -941,6 +1706,51 @@ const SPELL_EFFECTS = {
       addBurnPower(4, "Lightning Bolt");
       spawnFx("Lightning Bolt: +4 Burn to Boss!", "#ff4757");
     }
+  },
+  furnace_arc() {
+    addBurnPower(3, "Furnace Arc");
+    addResonance(1, "Furnace Arc");
+    spawnFx("Furnace Arc: +3 Burn & +1 Mult!", "#ff4757");
+  },
+  ashen_bargain(card) {
+    const lifeCost = Math.max(0, Math.floor(Number(card.lifeCost) || 0));
+    state.playerLife -= lifeCost;
+    recordCombatEvent("trigger", `Ashen Bargain: paid ${lifeCost} Life.`, {
+      cardId: card.id,
+      amount: lifeCost,
+      resource: "life"
+    });
+    drawCards(2);
+    addResonance(1, "Ashen Bargain");
+    spawnFx(`Ashen Bargain: Paid ${lifeCost} Life, Drew 2 & +1 Mult!`, "#9b59b6");
+  },
+  slipstream_reversal() {
+    addResonance(2, "Slipstream Reversal");
+    if (state.enemyCreatures.length === 0) {
+      spawnFx("Slipstream Reversal: No blocker to return; +2 Mult!", "#3498db");
+      return;
+    }
+    const blockers = [...state.enemyCreatures].sort((a, b) => b.power - a.power);
+    openTargetPickerModal(
+      "Slipstream Reversal — Choose Blocker",
+      "Return an Enemy Blocker to its owner's hand and gain +2 Resonance:",
+      blockers,
+      (blocker, index) => `
+        <button type="button" class="board-card card-color-${blocker.color}" data-target-idx="${index}">
+          <div class="card-top-bar"><span class="card-title">${blocker.name}</span></div>
+          <div class="card-keywords">${blocker.keywords.map(keyword => `<span class="kw-tag">${keyword}</span>`).join("")}</div>
+          <div class="card-rules">Return this ${blocker.power}/${blocker.toughness} Blocker to its owner's hand.</div>
+          <div class="card-bottom-bar">
+            <span class="status-pill status-ready">${index === 0 ? "★ Recommended" : "Return"}</span>
+            <span class="pt-box">${blocker.power}/${blocker.toughness}</span>
+          </div>
+        </button>
+      `,
+      (chosen) => {
+        state.enemyCreatures = state.enemyCreatures.filter(blocker => blocker.uid !== chosen.uid);
+        spawnFx(`Slipstream Reversal returned ${chosen.name}!`, "#3498db");
+      }
+    );
   },
   unsummon() {
     drawCards(1);
@@ -1035,6 +1845,11 @@ const SPELL_EFFECTS = {
   },
   goblins_2() {
     spawnTokens("Goblin Token", 1, 1, "R", ["Haste"], 2);
+  },
+  sunlit_rally() {
+    spawnTokens("Soldier Token", 1, 1, "W", ["Haste"], 2);
+    addResonance(1, "Sunlit Rally");
+    spawnFx("Sunlit Rally: +2 Soldiers & +1 Mult!", "#ffe299");
   },
   ritual() {
     state.manaPool.R += 4;
@@ -1239,6 +2054,11 @@ const SPELL_EFFECTS = {
 
 function handleSpellCast(card) {
   state.turnStats.spells++;
+  recordCombatEvent("trigger", `${card.name} cast triggers resolved.`, {
+    cardId: card.id,
+    trigger: "spell_cast",
+    spellCount: state.turnStats.spells
+  });
   const enc = getCurrentEncounter();
   if (enc.spellWardTax && state.turnStats.spells === 1 && state.playerLands.length < 4 && state.enemyCreatures.length < 5) {
     state.enemyCreatures.push({
@@ -1365,7 +2185,144 @@ function isCardLegalForDeck(cardOrId, deckColors) {
   return true;
 }
 
-function sampleDraftPool(deckColors, count = 3, rng = Math.random) {
+function getAvailableCardEvolutionOptions(card) {
+  if (!card || card.type !== "Creature" || card.evolutionId) return [];
+  const keywords = new Set(Array.isArray(card.keywords) ? card.keywords : []);
+  return CARD_EVOLUTION_OPTIONS.filter(option =>
+    option.keywords.every(keyword => !keywords.has(keyword))
+  );
+}
+
+function getAvailableEvolutionTargets() {
+  return state.masterDeck.filter(card =>
+    card.type === "Creature" && getAvailableCardEvolutionOptions(card).length > 0
+  );
+}
+
+function applyCardEvolutionToCard(card, evolutionId) {
+  const option = getAvailableCardEvolutionOptions(card)
+    .find(item => item.id === evolutionId);
+  if (!card || !option || !isValidCardEvolution(card, option.id)) return false;
+
+  card.permPowerBonus = (Number(card.permPowerBonus) || 0) + option.powerBonus;
+  card.permToughnessBonus = (Number(card.permToughnessBonus) || 0) + option.toughnessBonus;
+  card.evolutionId = option.id;
+  if (!Array.isArray(card.keywords)) card.keywords = [];
+  option.keywords.forEach(keyword => {
+    if (!card.keywords.includes(keyword)) card.keywords.push(keyword);
+  });
+  return true;
+}
+
+function completeCardEvolutionPurchase(upgradeIdx, cardUid, evolutionId) {
+  const upgrade = state.shopStock.upgrades[upgradeIdx];
+  if (
+    !upgrade ||
+    upgrade.id !== "card_evolution" ||
+    upgrade.bought ||
+    state.runOver ||
+    state.combatLocked ||
+    state.gold < upgrade.cost
+  ) {
+    return false;
+  }
+
+  const card = state.masterDeck.find(item => item.uid === cardUid);
+  const option = getAvailableCardEvolutionOptions(card)
+    .find(item => item.id === evolutionId);
+  if (!card || !option || !isValidCardEvolution(card, option.id)) return false;
+
+  state.gold -= upgrade.cost;
+  upgrade.bought = true;
+  applyCardEvolutionToCard(card, option.id);
+  if (typeof markShopRewardHighlight === "function") {
+    markShopRewardHighlight(`upgrade_${upgrade.id}`);
+  }
+
+  saveRunState(true);
+  setLog(`${card.name} evolved: ${option.name}.`);
+  spawnFx(`${card.name} Evolved — ${option.name}!`, "#b18cff");
+  renderShop();
+  if (typeof showShopRewardSummary === "function") {
+    showShopRewardSummary(`${card.name} evolved: ${option.name}.`);
+  }
+  renderAll();
+  return true;
+}
+
+function canSafelyPurgeCard() {
+  const count = state.masterDeck ? state.masterDeck.length : 0;
+  const MIN_DECK_SIZE_FOR_PURGE = 30;
+  if (count <= MIN_DECK_SIZE_FOR_PURGE) {
+    return {
+      allowed: false,
+      reason: `Deck has ${count} cards (minimum ${MIN_DECK_SIZE_FOR_PURGE} required to purge)`
+    };
+  }
+  return {
+    allowed: true,
+    reason: `${count} cards in deck (min ${MIN_DECK_SIZE_FOR_PURGE})`
+  };
+}
+
+function getAvailablePurgeTargets() {
+  if (!state.masterDeck || !canSafelyPurgeCard().allowed) return [];
+  return state.masterDeck.slice();
+}
+
+function completeCardPurgePurchase(upgradeIdx, cardUid) {
+  const upgrade = state.shopStock.upgrades[upgradeIdx];
+  if (
+    !upgrade ||
+    upgrade.id !== "card_purge" ||
+    upgrade.bought ||
+    state.runOver ||
+    state.combatLocked ||
+    state.gold < upgrade.cost
+  ) {
+    return false;
+  }
+  if (!canSafelyPurgeCard().allowed) return false;
+
+  const cardIdx = state.masterDeck.findIndex(item => item.uid === cardUid);
+  if (cardIdx === -1) return false;
+
+  const [purgedCard] = state.masterDeck.splice(cardIdx, 1);
+  state.gold -= upgrade.cost;
+  upgrade.bought = true;
+
+  if (Array.isArray(state.library)) {
+    const libIdx = state.library.findIndex(c => c.uid === cardUid);
+    if (libIdx !== -1) state.library.splice(libIdx, 1);
+  }
+  if (Array.isArray(state.hand)) {
+    const handIdx = state.hand.findIndex(c => c.uid === cardUid);
+    if (handIdx !== -1) state.hand.splice(handIdx, 1);
+  }
+  if (Array.isArray(state.deck)) {
+    const deckIdx = state.deck.findIndex(c => c.uid === cardUid);
+    if (deckIdx !== -1) state.deck.splice(deckIdx, 1);
+  }
+
+  if (typeof playSoundCue === "function") {
+    playSoundCue("cardPurge");
+  }
+  if (typeof markShopRewardHighlight === "function") {
+    markShopRewardHighlight(`upgrade_${upgrade.id}`);
+  }
+
+  saveRunState(true);
+  setLog(`${purgedCard.name} was permanently exiled from your deck.`);
+  spawnFx(`${purgedCard.name} Exiled!`, "#ff6b8b");
+  renderShop();
+  if (typeof showShopRewardSummary === "function") {
+    showShopRewardSummary(`${purgedCard.name} exiled. Your deck now has ${state.masterDeck.length} cards.`);
+  }
+  renderAll();
+  return true;
+}
+
+function sampleDraftPool(deckColors, count = 3, rng = gameRandom) {
   if (typeof CARD_DB === "undefined") return [];
   const colorsSet = deckColors instanceof Set
     ? deckColors
@@ -1379,7 +2336,7 @@ function sampleDraftPool(deckColors, count = 3, rng = Math.random) {
   const chosen = [];
 
   for (let i = 0; i < needed && pool.length > 0; i++) {
-    const rawR = typeof rng === "function" ? rng() : Math.random();
+    const rawR = typeof rng === "function" ? rng() : gameRandom();
     const safeR = Number.isFinite(rawR) ? Math.abs(rawR) : 0;
     const idx = Math.floor(safeR * pool.length) % pool.length;
     chosen.push(pool[idx]);
@@ -1387,6 +2344,11 @@ function sampleDraftPool(deckColors, count = 3, rng = Math.random) {
   }
 
   return chosen;
+}
+
+function sampleGeneratedCreature(deckColors, seed = Math.floor(gameRandom() * 4294967296)) {
+  const card = createGeneratedCreatureCard(seed, deckColors);
+  return card && isCardLegalForDeck(card, deckColors) ? card : null;
 }
 
 const generateDraftRewardPool = sampleDraftPool;
@@ -1400,24 +2362,29 @@ function selectDraftCard(choiceIdx) {
     return false;
   }
 
-  let targetId = null;
+  let targetCard = null;
   if (typeof choiceIdx === "number") {
     if (choiceIdx < 0 || choiceIdx >= choices.length) return false;
     const item = choices[choiceIdx];
-    targetId = typeof item === "string" ? item : (item && item.id ? item.id : null);
+    targetCard = typeof item === "string" ? CARD_DB[item] : (item?.generatedDefinition || item);
   } else if (typeof choiceIdx === "string") {
     const found = choices.find(c => (typeof c === "string" ? c : c?.id) === choiceIdx);
     if (!found) return false;
-    targetId = choiceIdx;
+    targetCard = typeof found === "string" ? CARD_DB[found] : (found?.generatedDefinition || found);
+  } else if (choiceIdx && typeof choiceIdx === "object" && typeof choiceIdx.id === "string") {
+    const found = choices.find(c => (typeof c === "string" ? c : c?.id) === choiceIdx.id);
+    if (!found) return false;
+    targetCard = typeof found === "string" ? CARD_DB[found] : (found?.generatedDefinition || found);
   }
-  if (!targetId || !CARD_DB[targetId]) return false;
+  if (!targetCard || (!CARD_DB[targetCard.id] && !normalizeGeneratedCardDefinition(targetCard))) return false;
 
-  const draftedCard = cloneCard(targetId);
+  const draftedCard = cloneCard(targetCard);
+  if (!draftedCard) return false;
   state.masterDeck.push(draftedCard);
 
   state.pendingDraft.resolved = true;
   state.pendingDraft.skipped = false;
-  state.pendingDraft.selectedCardId = targetId;
+  state.pendingDraft.selectedCardId = draftedCard.id;
 
   saveRunState(true);
 
@@ -1436,6 +2403,9 @@ function selectDraftCard(choiceIdx) {
     }
     if (typeof renderShop === "function") {
       renderShop();
+    }
+    if (typeof showShopRewardSummary === "function") {
+      showShopRewardSummary(`${draftedCard.name} joined your deck. Your deck now has ${state.masterDeck.length} cards.`);
     }
     if (typeof safeShowModal === "function") {
       safeShowModal("shop-dialog");
@@ -1473,6 +2443,9 @@ function skipDraft() {
     if (typeof renderShop === "function") {
       renderShop();
     }
+    if (typeof showShopRewardSummary === "function") {
+      showShopRewardSummary(`Draft skipped: +$2 Gold. You now have $${state.gold}.`);
+    }
     if (typeof safeShowModal === "function") {
       safeShowModal("shop-dialog");
     }
@@ -1497,7 +2470,15 @@ function canSafelyThinBasics() {
 }
 
 function handleEncounterVictory() {
+  const route = ensureRouteState();
+  if (!completeCurrentRouteNode()) return false;
+  if (typeof playSoundCue === "function") playSoundCue("victory");
+
   const enc = getCurrentEncounter();
+  recordCombatEvent("result", `${enc.name} was defeated.`, {
+    outcome: "victory",
+    encounter: enc.name
+  });
   const unusedTurnsBonus = Math.max(0, state.maxTurns - state.turn);
   const interest = Math.min(3, Math.floor(state.gold / 5));
   const earned = enc.reward + unusedTurnsBonus + interest;
@@ -1507,19 +2488,21 @@ function handleEncounterVictory() {
   const healed = gainLife(VICTORY_HEAL, "Victory Recovery");
 
   // Mark current route node as completed and flag pending route choice if branches remain
-  const route = ensureRouteState();
-  completeCurrentRouteNode();
   const nextNodes = getAvailableNextRouteNodes();
   route.pendingSelection = nextNodes.length > 0;
   route.lastActivitySummary = `Defeated ${enc.name} (+$${earned} Gold${healed > 0 ? `, +${healed} Life` : ""})`;
 
   generateShopStock(false);
 
-  const isFinalEncounter = state.encounterIdx >= ENCOUNTERS.length - 1;
+  let profileResult = null;
+  const isFinalEncounter = state.encounterIdx % getActiveCampaignEncounters().length === getActiveCampaignEncounters().length - 1;
   if (!isFinalEncounter) {
-    const draftCards = sampleDraftPool(getDeckColors(), 3);
+    const deckColors = getDeckColors();
+    const draftCards = sampleDraftPool(deckColors, 2);
+    const generatedCard = sampleGeneratedCreature(deckColors);
+    if (generatedCard) draftCards.push(generatedCard);
     state.pendingDraft = {
-      choices: draftCards.map(c => c.id),
+      choices: draftCards.map(c => c.generated ? c : c.id),
       encounterIdx: state.encounterIdx,
       resolved: false,
       skipped: false,
@@ -1535,6 +2518,8 @@ function handleEncounterVictory() {
     saveRunState(false);
   } else {
     state.pendingDraft = null;
+    recordCompletedRun("victory");
+    profileResult = recordCampaignClear();
     saveRunState(true);
   }
 
@@ -1543,17 +2528,45 @@ function handleEncounterVictory() {
 
   if (!isHeadlessEnv()) {
     const badgeText = `VICTORY • ${enc.name.toUpperCase()} DEFEATED!`;
+    const profileNotice = profileResult?.newlyUnlockedDeckId
+      ? ` • New starter deck unlocked: ${STARTER_DECKS.find(deck => deck.id === profileResult.newlyUnlockedDeckId)?.name || profileResult.newlyUnlockedDeckId}`
+      : profileResult?.error
+        ? ` • Persistent unlock could not be saved: ${profileResult.error}`
+        : "";
     const summaryText =
-      `Earned $${enc.reward} Ward Bounty + $${unusedTurnsBonus} Unused Turn Bonus + $${interest} Interest ($${earned} Total)${healed > 0 ? ` • Restored +${healed} Life` : ""}. Sculpt your deck before choosing your next Planar Route stop!`;
-    if (typeof presentVictoryOrShopModal === "function") {
-      presentVictoryOrShopModal(enc, earned, healed, badgeText, summaryText);
+      `Earned $${enc.reward} Ward Bounty + $${unusedTurnsBonus} Unused Turn Bonus + $${interest} Interest ($${earned} Total)${healed > 0 ? ` • Restored +${healed} Life` : ""}${profileNotice}. Sculpt your deck before choosing your next Planar Route stop!`;
+    const presentResult = () => {
+      if (typeof presentVictoryOrShopModal === "function") {
+        presentVictoryOrShopModal(enc, earned, healed, badgeText, summaryText);
+      }
+    };
+    const transitionDelay = typeof getCombatAnimationDelay === "function"
+      ? getCombatAnimationDelay(980)
+      : 0;
+    if (!isHeadlessEnv() && transitionDelay > 0) {
+      state.combatLocked = true;
+      renderAll();
+      setTimeout(() => {
+        state.combatLocked = false;
+        presentResult();
+      }, transitionDelay);
+    } else {
+      presentResult();
     }
   }
+  return true;
 }
 
 function handleDefeat() {
   state.runOver = true;
   state.combatLocked = false;
+  if (typeof playSoundCue === "function") playSoundCue("defeat");
+  const defeatedEncounter = getCurrentEncounter();
+  recordCombatEvent("result", `Run ended at ${defeatedEncounter.name}.`, {
+    outcome: "defeat",
+    encounter: defeatedEncounter.name
+  });
+  recordCompletedRun("defeat");
   clearRunState();
   const enc = getCurrentEncounter();
   setLog(`Defeated by ${enc.name} on Turn ${state.turn}! Choose a deck to start a new run.`);
@@ -1624,7 +2637,7 @@ function generateShopStock(preserveUpgrades = false) {
     const avail = pool.filter(x => !pickedIds.has(x.id));
     if (avail.length === 0) return null;
     const totalW = avail.reduce((s, x) => s + x.weight, 0);
-    let r = Math.random() * totalW;
+    let r = gameRandom() * totalW;
     for (const item of avail) {
       r -= item.weight;
       if (r <= 0) {
@@ -1640,7 +2653,7 @@ function generateShopStock(preserveUpgrades = false) {
   const chosenCards = [];
   // Slots 1 & 2 strictly from in-color pool; Slot 3 has a 20% chance of an off-color splash
   for (let slot = 0; slot < 3; slot++) {
-    const useSplash = slot === 2 && Math.random() < 0.2 && splashPool.length > 0;
+    const useSplash = slot === 2 && gameRandom() < 0.2 && splashPool.length > 0;
     const id = pickWeighted(useSplash ? splashPool : inColorPool) || pickWeighted(inColorPool) || pickWeighted(splashPool);
     if (id) chosenCards.push(id);
   }
@@ -1652,13 +2665,20 @@ function generateShopStock(preserveUpgrades = false) {
   }));
 
   if (!preserveUpgrades || state.shopStock.upgrades.length === 0) {
-    const randomScroll = CONSUMABLE_DB[Math.floor(Math.random() * CONSUMABLE_DB.length)];
+    const randomScroll = CONSUMABLE_DB[Math.floor(gameRandom() * CONSUMABLE_DB.length)];
     state.shopStock.upgrades = [
       {
         id: "sanctum_heal",
         name: "Sanctum Healing Draught",
         desc: `Restore +8 Life (up to ${MAX_LIFE} Max Life).`,
         cost: 3,
+        bought: false
+      },
+      {
+        id: "card_evolution",
+        name: "Creature Evolution",
+        desc: "Choose an unevolved Creature, then permanently gain +3/+3 or +1/+1 and Trample.",
+        cost: CARD_EVOLUTION_COST,
         bought: false
       },
       {
@@ -1697,6 +2717,13 @@ function generateShopStock(preserveUpgrades = false) {
         desc: "Permanently EXILE up to 2 excess Basic Lands without starving Fetch Lands.",
         cost: 3,
         bought: false
+      },
+      {
+        id: "card_purge",
+        name: "Planar Purge (Exile Card)",
+        desc: "Permanently exile any chosen card from your deck (minimum 30 cards).",
+        cost: 4,
+        bought: false
       }
     ];
   }
@@ -1707,9 +2734,19 @@ function buyRelic(idx) {
   if (!item || item.bought || state.gold < item.cost || state.relics.length >= 5) return;
   state.gold -= item.cost;
   item.bought = true;
+  if (typeof playSoundCue === "function") playSoundCue("shopBuy");
   state.relics.push({ ...item });
+  if (typeof markShopRewardHighlight === "function") {
+    markShopRewardHighlight(`relic_${item.id}`);
+  }
+  if (typeof markRelicRewardHighlight === "function") {
+    markRelicRewardHighlight(item.id);
+  }
   saveRunState(true);
   renderShop();
+  if (typeof showShopRewardSummary === "function") {
+    showShopRewardSummary(`${item.name} acquired and added to your relics.`);
+  }
   renderAll();
 }
 
@@ -1718,9 +2755,16 @@ function buyDraftCard(idx) {
   if (!item || item.bought || state.gold < item.cost) return;
   state.gold -= item.cost;
   item.bought = true;
+  if (typeof playSoundCue === "function") playSoundCue("shopBuy");
   state.masterDeck.push(item.card);
+  if (typeof markShopRewardHighlight === "function") {
+    markShopRewardHighlight(`card_${item.card.id}`);
+  }
   saveRunState(true);
   renderShop();
+  if (typeof showShopRewardSummary === "function") {
+    showShopRewardSummary(`${item.card.name} drafted into your deck.`);
+  }
   renderAll();
 }
 
@@ -1730,9 +2774,23 @@ function buyUpgrade(idx) {
   if (upg.isConsumable && state.consumables.length >= 2) return;
   if (upg.id === "sanctum_heal" && state.playerLife >= MAX_LIFE) return;
   if (upg.id === "exile_thin" && !canSafelyThinBasics().allowed) return;
+  if (upg.id === "card_purge") {
+    if (!canSafelyPurgeCard().allowed) return;
+    if (typeof openCardPurgePicker === "function") {
+      openCardPurgePicker(idx);
+    }
+    return;
+  }
+  if (upg.id === "card_evolution") {
+    if (getAvailableEvolutionTargets().length > 0 && typeof openCardEvolutionPicker === "function") {
+      openCardEvolutionPicker(idx);
+    }
+    return;
+  }
 
   state.gold -= upg.cost;
   upg.bought = true;
+  if (typeof playSoundCue === "function") playSoundCue("shopBuy");
 
   if (upg.id === "sanctum_heal") {
     const healed = gainLife(8, "Sanctum Healing Draught");
@@ -1745,7 +2803,7 @@ function buyUpgrade(idx) {
   } else if (upg.id === "foil_buff") {
     const creatures = state.masterDeck.filter(c => c.type === "Creature");
     if (creatures.length > 0) {
-      const target = creatures[Math.floor(Math.random() * creatures.length)];
+      const target = creatures[Math.floor(gameRandom() * creatures.length)];
       target.foil = target.foil || "Foil";
       target.permPowerBonus = (target.permPowerBonus || 0) + 3;
       target.permToughnessBonus = (target.permToughnessBonus || 0) + 3;
@@ -1754,13 +2812,13 @@ function buyUpgrade(idx) {
   } else if (upg.id === "etched_foil") {
     const spells = state.masterDeck.filter(c => c.type !== "Land");
     if (spells.length > 0) {
-      const target = spells[Math.floor(Math.random() * spells.length)];
+      const target = spells[Math.floor(gameRandom() * spells.length)];
       target.foil = "Etched";
     }
   } else if (upg.id === "halo_foil") {
     const spells = state.masterDeck.filter(c => c.type !== "Land");
     if (spells.length > 0) {
-      const target = spells[Math.floor(Math.random() * spells.length)];
+      const target = spells[Math.floor(gameRandom() * spells.length)];
       target.foil = "Halo";
     }
   } else if (upg.id === "exile_thin") {
@@ -1787,7 +2845,13 @@ function buyUpgrade(idx) {
   }
 
   saveRunState(true);
+  if (typeof markShopRewardHighlight === "function") {
+    markShopRewardHighlight(`upgrade_${upg.id}`);
+  }
   renderShop();
+  if (typeof showShopRewardSummary === "function") {
+    showShopRewardSummary(`${upg.name} applied.`);
+  }
   renderAll();
 }
 
@@ -1901,14 +2965,28 @@ function fallbackComputeSaveChecksum(saveObj) {
     inShop: Boolean(saveObj.inShop),
     archetypeId: String(saveObj.archetypeId || ""),
     encounterIdx: Number(saveObj.encounterIdx) || 0,
+    ...(saveObj.challengeId && saveObj.challengeId !== "standard" ? { challengeId: String(saveObj.challengeId) } : {}),
+    ...(saveObj.campaignId && saveObj.campaignId !== DEFAULT_CAMPAIGN_ID ? { campaignId: String(saveObj.campaignId) } : {}),
+    ...(saveObj.runSeed ? {
+      runSeed: String(saveObj.runSeed),
+      rngState: Number(saveObj.rngState) || hashRunSeed(saveObj.runSeed)
+    } : {}),
+    ...(typeof saveObj.runId === "string" && saveObj.runId.length > 0 ? {
+      runId: String(saveObj.runId),
+      runStartedAt: Number(saveObj.runStartedAt) || 0,
+      runHistoryRecorded: Boolean(saveObj.runHistoryRecorded),
+      runTurns: Math.max(0, Math.floor(Number(saveObj.runTurns) || 0))
+    } : {}),
     playerLife: Number(saveObj.playerLife) || 20,
     gold: Number(saveObj.gold) || 0,
     masterDeck: Array.isArray(saveObj.masterDeck)
       ? saveObj.masterDeck.map(c => ({
           id: c && c.id ? String(c.id) : "",
+          ...(c && c.generatedDefinition ? { generatedDefinition: c.generatedDefinition } : {}),
           foil: (c && c.foil) || null,
           permPowerBonus: Number(c && c.permPowerBonus) || 0,
           permToughnessBonus: Number(c && c.permToughnessBonus) || 0,
+          ...(c && c.evolutionId ? { evolutionId: c.evolutionId } : {}),
           keywords: Array.isArray(c && c.keywords) ? [...c.keywords] : []
         }))
       : [],
@@ -1946,15 +3024,19 @@ function isValidEncounterSnapshot(snapshot) {
   return true;
 }
 
-function normalizeRouteState(rawRoute, encounterIdx = 0, inShop = false) {
+function normalizeRouteState(rawRoute, encounterIdx = 0, inShop = false, campaignId = getActiveCampaignId()) {
   if (typeof normalizeRouteObject === "function") {
-    return normalizeRouteObject(rawRoute, encounterIdx, inShop);
+    return normalizeRouteObject(rawRoute, encounterIdx, inShop, campaignId);
   }
+  const campaignEncounters = typeof getCampaignEncounters === "function"
+    ? getCampaignEncounters(campaignId)
+    : ENCOUNTERS;
   const encCount =
-    typeof ENCOUNTERS !== "undefined" && Array.isArray(ENCOUNTERS) && ENCOUNTERS.length > 0
-      ? ENCOUNTERS.length
+    Array.isArray(campaignEncounters) && campaignEncounters.length > 0
+      ? campaignEncounters.length
       : 6;
-  const safeEncIdx = Math.max(0, Math.floor(Number(encounterIdx) || 0));
+  const parsedEncIdx = Number(encounterIdx);
+  const safeEncIdx = Number.isFinite(parsedEncIdx) ? Math.max(0, Math.floor(parsedEncIdx)) : 0;
   const defaultLoop = Math.floor(safeEncIdx / encCount);
   const encMod = safeEncIdx % encCount;
 
@@ -1968,29 +3050,30 @@ function normalizeRouteState(rawRoute, encounterIdx = 0, inShop = false) {
   ];
   const fallbackEntry = fallbackPathByEnc[encMod] || fallbackPathByEnc[0];
 
-  const isValidNodeId = (id) => {
-    if (typeof id !== "string" || id.length === 0) return false;
-    if (typeof CAMPAIGN_ROUTE_NODES !== "undefined" && Array.isArray(CAMPAIGN_ROUTE_NODES)) {
-      return CAMPAIGN_ROUTE_NODES.some(n => n.id === id);
-    }
-    return true;
-  };
-
-  if (!rawRoute || typeof rawRoute !== "object" || Array.isArray(rawRoute)) {
+  const campaignRouteNodes = typeof getCampaignRouteNodes === "function"
+    ? getCampaignRouteNodes(campaignId)
+    : CAMPAIGN_ROUTE_NODES;
+  const routeNodes = Array.isArray(campaignRouteNodes)
+    ? campaignRouteNodes
+    : null;
+  const nodeById = routeNodes ? new Map(routeNodes.map(node => [node.id, node])) : null;
+  const isValidNodeId = (id) => typeof id === "string" && id.length > 0 && (!nodeById || nodeById.has(id));
+  const fallbackRoute = () => {
     const completed = inShop ? [...fallbackEntry.prior, fallbackEntry.current] : [...fallbackEntry.prior];
     return {
       loop: defaultLoop,
       currentNodeId: fallbackEntry.current,
       completedNodeIds: completed,
       visitedNodeIds: [...fallbackEntry.prior, fallbackEntry.current],
+      pendingEventId: null,
       pendingSelection: Boolean(inShop && encMod < encCount - 1),
       lastActivitySummary: null
     };
-  }
+  };
+  if (!rawRoute || typeof rawRoute !== "object" || Array.isArray(rawRoute)) return fallbackRoute();
 
-  const currentNodeId = isValidNodeId(rawRoute.currentNodeId)
-    ? rawRoute.currentNodeId
-    : fallbackEntry.current;
+  const currentNodeId = rawRoute.currentNodeId;
+  if (!isValidNodeId(currentNodeId)) return fallbackRoute();
   const completedNodeIds = Array.isArray(rawRoute.completedNodeIds)
     ? Array.from(new Set(rawRoute.completedNodeIds.filter(isValidNodeId)))
     : [];
@@ -2000,15 +3083,34 @@ function normalizeRouteState(rawRoute, encounterIdx = 0, inShop = false) {
   if (!visitedNodeIds.includes(currentNodeId)) {
     visitedNodeIds.push(currentNodeId);
   }
-  const rawLoop = Number(rawRoute.loop);
-  const loop = Number.isFinite(rawLoop) && rawLoop >= 0 ? Math.floor(rawLoop) : defaultLoop;
+  if (nodeById) {
+    const currentNode = nodeById.get(currentNodeId);
+    const visitedSet = new Set(visitedNodeIds);
+    const completedSet = new Set(completedNodeIds);
+    const validPath = visitedNodeIds[0] === routeNodes[0]?.id &&
+      visitedNodeIds[visitedNodeIds.length - 1] === currentNodeId &&
+      visitedNodeIds.every((id, idx) =>
+        idx === 0 || nodeById.get(visitedNodeIds[idx - 1])?.next?.includes(id)
+      ) &&
+      completedNodeIds.every(id => visitedSet.has(id)) &&
+      visitedNodeIds.slice(0, -1).every(id => completedSet.has(id)) &&
+      currentNode?.encounterIdx === encMod;
+    if (!validPath) return fallbackRoute();
+  }
 
   return {
-    loop,
+    loop: defaultLoop,
     currentNodeId,
     completedNodeIds,
     visitedNodeIds,
-    pendingSelection: Boolean(rawRoute.pendingSelection),
+    pendingEventId: nodeById?.get(currentNodeId)?.type === "event" && !completedNodeIds.includes(currentNodeId)
+      ? currentNodeId
+      : null,
+    pendingSelection: Boolean(
+      rawRoute.pendingSelection &&
+      completedNodeIds.includes(currentNodeId) &&
+      nodeById?.get(currentNodeId)?.next?.some(id => !completedNodeIds.includes(id))
+    ),
     lastActivitySummary: typeof rawRoute.lastActivitySummary === "string" ? rawRoute.lastActivitySummary : null
   };
 }
@@ -2047,12 +3149,18 @@ function normalizeCanonicalSave(candidate) {
   const normalizedDeck = working.masterDeck
     .map(item => {
       const id = typeof item === "string" ? item : item?.id;
-      if (!id || (typeof CARD_DB !== "undefined" && !CARD_DB[id])) return null;
+      const generatedDefinition = item && normalizeGeneratedCardDefinition(item.generatedDefinition || item);
+      if (!id || (typeof CARD_DB !== "undefined" && !CARD_DB[id] && (!generatedDefinition || generatedDefinition.id !== id))) return null;
       return {
         id: String(id),
+        ...(generatedDefinition ? { generatedDefinition } : {}),
         foil: (item && item.foil) || null,
         permPowerBonus: Number(item && item.permPowerBonus) || 0,
         permToughnessBonus: Number(item && item.permToughnessBonus) || 0,
+        ...(item && isValidCardEvolutionState(
+          generatedDefinition || (typeof CARD_DB !== "undefined" ? CARD_DB[id] : null),
+          item
+        ) ? { evolutionId: item.evolutionId } : {}),
         keywords: Array.isArray(item && item.keywords) ? [...item.keywords] : []
       };
     })
@@ -2073,12 +3181,25 @@ function normalizeCanonicalSave(candidate) {
   const matchedArch = STARTER_DECKS.find(d => d.id === working.archetypeId) || STARTER_DECKS[0];
   const inShop = Boolean(working.inShop);
   const safeEncIdx = Math.max(0, Math.floor(Number(working.encounterIdx) || 0));
+  const challengeId = normalizeRunChallengeId(working.challengeId);
+  const runSeed = normalizeRunSeed(working.runSeed);
+  const rngState = normalizeSavedRngState(runSeed, working.rngState);
+  const runId = typeof working.runId === "string" && working.runId.length > 0
+    ? working.runId.slice(0, 120)
+    : null;
+  const runStartedAt = Number.isFinite(Number(working.runStartedAt)) && Number(working.runStartedAt) > 0
+    ? Number(working.runStartedAt)
+    : 0;
+  const runTurns = Number.isFinite(Number(working.runTurns)) && Number(working.runTurns) >= 0
+    ? Math.floor(Number(working.runTurns))
+    : 0;
   const canonicalSave = {
     version: 1,
     savedAt: Number.isFinite(Number(working.savedAt)) && Number(working.savedAt) > 0 ? Number(working.savedAt) : 0,
     inShop,
     archetypeId: matchedArch ? matchedArch.id : String(working.archetypeId || STARTER_DECKS[0].id),
     encounterIdx: safeEncIdx,
+    ...(challengeId !== "standard" ? { challengeId } : {}),
     playerLife: Math.min(MAX_LIFE, Math.max(1, Math.round(Number(working.playerLife) || START_LIFE))),
     gold: Math.max(0, Math.floor(Number(working.gold) || 0)),
     masterDeck: normalizedDeck,
@@ -2093,7 +3214,22 @@ function normalizeCanonicalSave(candidate) {
           upgrades: Array.isArray(working.shopStock.upgrades) ? working.shopStock.upgrades : []
         }
       : null,
-    route: normalizeRouteState(working.route, safeEncIdx, inShop)
+    ...(normalizeCampaignId(working.campaignId) !== DEFAULT_CAMPAIGN_ID
+      ? { campaignId: normalizeCampaignId(working.campaignId) }
+      : {}),
+    ...(runSeed ? { runSeed, rngState } : {}),
+    ...(runId ? {
+      runId,
+      runStartedAt,
+      runHistoryRecorded: Boolean(working.runHistoryRecorded),
+      runTurns
+    } : {}),
+    route: normalizeRouteState(
+      working.route,
+      safeEncIdx,
+      inShop,
+      normalizeCampaignId(working.campaignId)
+    )
   };
 
   let pendingDraft = null;
@@ -2102,8 +3238,16 @@ function normalizeCanonicalSave(candidate) {
       ? working.pendingDraft.choices
       : (Array.isArray(working.pendingDraft.cards) ? working.pendingDraft.cards : []);
     const validChoices = rawChoices
-      .map(item => (typeof item === "string" ? item : (item && item.id ? item.id : null)))
-      .filter(id => typeof id === "string" && id.length > 0 && (typeof CARD_DB === "undefined" || CARD_DB[id]));
+      .map(item => {
+        const id = typeof item === "string" ? item : item?.id;
+        const generatedDefinition = item && typeof item === "object"
+          ? normalizeGeneratedCardDefinition(item.generatedDefinition || item)
+          : null;
+        if (typeof id !== "string" || id.length === 0) return null;
+        if (typeof CARD_DB === "undefined" || CARD_DB[id]) return id;
+        return generatedDefinition && generatedDefinition.id === id ? { id, generatedDefinition } : null;
+      })
+      .filter(Boolean);
     if (validChoices.length > 0 || working.pendingDraft.resolved) {
       const encIdx = Number(working.pendingDraft.encounterIdx);
       pendingDraft = {
@@ -2211,10 +3355,18 @@ function createFullRunSnapshot() {
     runOver: state.runOver,
     combatLocked: state.combatLocked,
     deckArchetype: state.deckArchetype,
+    campaignId: getActiveCampaignId(),
+    runSeed: state.runSeed,
+    rngState: state.rngState,
+    runId: state.runId,
+    runStartedAt: state.runStartedAt,
+    runHistoryRecorded: state.runHistoryRecorded,
+    runTurns: state.runTurns,
     masterDeck: deepCloneSaveData(state.masterDeck),
     relics: deepCloneSaveData(state.relics),
     consumables: deepCloneSaveData(state.consumables),
     encounterIdx: state.encounterIdx,
+    challengeId: normalizeRunChallengeId(state.challengeId),
     playerLife: state.playerLife,
     gold: state.gold,
     route: deepCloneSaveData(ensureRouteState()),
@@ -2230,13 +3382,25 @@ function restoreFullRunSnapshot(fullSnapshot) {
   state.runOver = Boolean(fullSnapshot.runOver);
   state.combatLocked = Boolean(fullSnapshot.combatLocked);
   state.deckArchetype = fullSnapshot.deckArchetype || STARTER_DECKS[0];
+  state.campaignId = normalizeCampaignId(fullSnapshot.campaignId);
+  state.runSeed = normalizeRunSeed(fullSnapshot.runSeed);
+  state.rngState = normalizeSavedRngState(state.runSeed, fullSnapshot.rngState);
+  state.runId = typeof fullSnapshot.runId === "string" && fullSnapshot.runId.length > 0
+    ? fullSnapshot.runId.slice(0, 120)
+    : createRunId();
+  state.runStartedAt = Number.isFinite(Number(fullSnapshot.runStartedAt)) && Number(fullSnapshot.runStartedAt) > 0
+    ? Number(fullSnapshot.runStartedAt)
+    : Date.now();
+  state.runHistoryRecorded = Boolean(fullSnapshot.runHistoryRecorded);
+  state.runTurns = Math.max(0, Math.floor(Number(fullSnapshot.runTurns) || 0));
+  state.challengeId = normalizeRunChallengeId(fullSnapshot.challengeId);
   state.masterDeck = deepCloneSaveData(fullSnapshot.masterDeck || []);
   state.relics = deepCloneSaveData(fullSnapshot.relics || []);
   state.consumables = deepCloneSaveData(fullSnapshot.consumables || []);
   state.encounterIdx = Number(fullSnapshot.encounterIdx) || 0;
   state.playerLife = Number(fullSnapshot.playerLife) || START_LIFE;
   state.gold = Number(fullSnapshot.gold) || 0;
-  state.route = normalizeRouteState(fullSnapshot.route, state.encounterIdx, false);
+  state.route = normalizeRouteState(fullSnapshot.route, state.encounterIdx, false, state.campaignId);
   state.shopStock = deepCloneSaveData(fullSnapshot.shopStock || { relics: [], cards: [], upgrades: [] });
   state.pendingDraft = fullSnapshot.pendingDraft ? deepCloneSaveData(fullSnapshot.pendingDraft) : null;
   if (state.pendingDraft && typeof state.pendingDraft === "object") {
@@ -2262,6 +3426,15 @@ function createCanonicalSavePayload(inShop = false) {
     inShop: Boolean(inShop),
     archetypeId: (state.deckArchetype && state.deckArchetype.id) || STARTER_DECKS[0].id,
     encounterIdx: state.encounterIdx,
+    ...(state.challengeId && state.challengeId !== "standard" ? { challengeId: state.challengeId } : {}),
+    ...(getActiveCampaignId() !== DEFAULT_CAMPAIGN_ID ? { campaignId: getActiveCampaignId() } : {}),
+    ...(state.runSeed ? { runSeed: state.runSeed, rngState: state.rngState } : {}),
+    ...(state.runId ? {
+      runId: state.runId,
+      runStartedAt: state.runStartedAt,
+      runHistoryRecorded: Boolean(state.runHistoryRecorded),
+      runTurns: state.runTurns
+    } : {}),
     playerLife: state.playerLife,
     gold: state.gold,
     masterDeck: state.masterDeck.map(c => ({
@@ -2269,7 +3442,9 @@ function createCanonicalSavePayload(inShop = false) {
       foil: c.foil || null,
       permPowerBonus: c.permPowerBonus || 0,
       permToughnessBonus: c.permToughnessBonus || 0,
-      keywords: [...(c.keywords || [])]
+      ...(c.evolutionId ? { evolutionId: c.evolutionId } : {}),
+      keywords: [...(c.keywords || [])],
+      generatedDefinition: c.generated ? getGeneratedCardDefinition(c) : undefined
     })),
     relicIds: state.relics.map(r => r.id),
     relics: state.relics.map(r => ({ id: r.id })),
@@ -2279,7 +3454,11 @@ function createCanonicalSavePayload(inShop = false) {
     route: deepCloneSaveData(ensureRouteState()),
     pendingDraft: state.pendingDraft ? {
       choices: Array.isArray(state.pendingDraft.choices)
-        ? [...state.pendingDraft.choices]
+        ? state.pendingDraft.choices.map(item =>
+            typeof item === "string" || !item?.generated
+              ? item
+              : { id: item.id, generatedDefinition: getGeneratedCardDefinition(item) }
+          )
         : (Array.isArray(state.pendingDraft.cards) ? state.pendingDraft.cards.map(c => (typeof c === "string" ? c : c?.id)).filter(Boolean) : []),
       encounterIdx: Number(state.pendingDraft.encounterIdx) || state.encounterIdx,
       resolved: Boolean(state.pendingDraft.resolved),
@@ -2339,20 +3518,38 @@ function clearRunState() {
 function applyCanonicalSaveToState(saved, recoveredFromBackup = false) {
   const arch = STARTER_DECKS.find(d => d.id === saved.archetypeId) || STARTER_DECKS[0];
   state.deckArchetype = arch;
+  state.campaignId = normalizeCampaignId(saved.campaignId);
+  state.runSeed = normalizeRunSeed(saved.runSeed);
+  state.rngState = normalizeSavedRngState(state.runSeed, saved.rngState);
+  state.runId = typeof saved.runId === "string" && saved.runId.length > 0
+    ? saved.runId
+    : createRunId();
+  state.runStartedAt = Number.isFinite(Number(saved.runStartedAt)) && Number(saved.runStartedAt) > 0
+    ? Number(saved.runStartedAt)
+    : Date.now();
+  state.runHistoryRecorded = Boolean(saved.runHistoryRecorded);
+  state.runTurns = Math.max(0, Math.floor(Number(saved.runTurns) || 0));
+  state.challengeId = normalizeRunChallengeId(saved.challengeId);
   state.encounterIdx = Number(saved.encounterIdx) || 0;
   state.playerLife = Math.min(MAX_LIFE, Math.max(1, Number(saved.playerLife) || START_LIFE));
   state.gold = Math.max(0, Number(saved.gold) || 0);
   state.runOver = false;
   state.combatLocked = false;
-  state.route = normalizeRouteState(saved.route, state.encounterIdx, saved.inShop);
+  state.route = normalizeRouteState(saved.route, state.encounterIdx, saved.inShop, state.campaignId);
 
   if (saved.pendingDraft && typeof saved.pendingDraft === "object") {
     const rawChoices = Array.isArray(saved.pendingDraft.choices)
       ? saved.pendingDraft.choices
       : (Array.isArray(saved.pendingDraft.cards) ? saved.pendingDraft.cards : []);
     const validChoices = rawChoices
-      .map(item => (typeof item === "string" ? item : (item && item.id ? item.id : null)))
-      .filter(id => typeof id === "string" && id.length > 0 && (typeof CARD_DB === "undefined" || CARD_DB[id]));
+      .map(item => {
+        const id = typeof item === "string" ? item : item?.id;
+        if (typeof id !== "string" || id.length === 0) return null;
+        if (CARD_DB[id]) return id;
+        const generatedDefinition = item && normalizeGeneratedCardDefinition(item.generatedDefinition || item);
+        return generatedDefinition && generatedDefinition.id === id ? generatedDefinition : null;
+      })
+      .filter(Boolean);
     state.pendingDraft = {
       choices: validChoices,
       encounterIdx: Number.isFinite(Number(saved.pendingDraft.encounterIdx)) ? Math.floor(Number(saved.pendingDraft.encounterIdx)) : state.encounterIdx,
@@ -2362,7 +3559,11 @@ function applyCanonicalSaveToState(saved, recoveredFromBackup = false) {
     };
     Object.defineProperty(state.pendingDraft, "cards", {
       get() {
-        return (this.choices || []).map(id => (typeof id === "string" ? CARD_DB[id] : id)).filter(Boolean);
+        return (this.choices || []).map(item =>
+          typeof item === "string"
+            ? CARD_DB[item]
+            : (item.generatedDefinition || item)
+        ).filter(Boolean);
       },
       enumerable: false,
       configurable: true
@@ -2372,19 +3573,24 @@ function applyCanonicalSaveToState(saved, recoveredFromBackup = false) {
   }
 
   state.masterDeck = saved.masterDeck
-    .filter(sc => CARD_DB[sc.id])
+    .filter(sc => CARD_DB[sc.id] || (sc.generatedDefinition && normalizeGeneratedCardDefinition(sc.generatedDefinition)))
     .map(sc => {
-      const card = cloneCard(sc.id);
+      const card = cloneCard(sc.generatedDefinition || sc.id);
+      if (!card) return null;
       card.foil = sc.foil || null;
       card.permPowerBonus = sc.permPowerBonus || 0;
       card.permToughnessBonus = sc.permToughnessBonus || 0;
+      if (isValidCardEvolutionState(card, sc)) {
+        card.evolutionId = sc.evolutionId;
+      }
       if (Array.isArray(sc.keywords)) {
         sc.keywords.forEach(kw => {
           if (!card.keywords.includes(kw)) card.keywords.push(kw);
         });
       }
       return card;
-    });
+    })
+    .filter(Boolean);
 
   const relicIdList = Array.isArray(saved.relicIds)
     ? saved.relicIds
@@ -2456,10 +3662,21 @@ function applyCanonicalSaveToState(saved, recoveredFromBackup = false) {
     return true;
   }
 
+  if (typeof resetCombatLogForEncounter === "function") resetCombatLogForEncounter();
+  recordCombatEvent("encounter", `Resumed ${getCurrentEncounter().name} on Turn ${state.turn}.`, {
+    encounter: getCurrentEncounter().name,
+    turn: state.turn,
+    resumed: true
+  });
   const prefix = recoveredFromBackup ? "⚠️ Recovered from backup save: " : "";
   setLog(`${prefix}Restored saved run (${arch.badge}, Encounter ${state.encounterIdx + 1})!`);
   renderAll();
-  if (!isHeadlessEnv() && state.route && state.route.pendingSelection && typeof openRouteModal === "function") {
+  if (
+    !isHeadlessEnv() &&
+    state.route &&
+    (state.route.pendingSelection || state.route.pendingEventId) &&
+    typeof openRouteModal === "function"
+  ) {
     openRouteModal(true);
   }
   return true;
@@ -2590,6 +3807,9 @@ const GameState = {
   clearRunState,
   isCardLegalForDeck,
   sampleDraftPool,
+  createGeneratedCreatureCard,
+  sampleGeneratedCreature,
+  normalizeGeneratedCardDefinition,
   generateDraftRewardPool,
   selectDraftCard,
   skipDraft
@@ -2603,6 +3823,9 @@ if (typeof globalThis !== "undefined") {
   globalThis.restoreFullRunSnapshot = restoreFullRunSnapshot;
   globalThis.isCardLegalForDeck = isCardLegalForDeck;
   globalThis.sampleDraftPool = sampleDraftPool;
+  globalThis.createGeneratedCreatureCard = createGeneratedCreatureCard;
+  globalThis.sampleGeneratedCreature = sampleGeneratedCreature;
+  globalThis.normalizeGeneratedCardDefinition = normalizeGeneratedCardDefinition;
   globalThis.generateDraftRewardPool = generateDraftRewardPool;
   globalThis.selectDraftCard = selectDraftCard;
   globalThis.skipDraft = skipDraft;

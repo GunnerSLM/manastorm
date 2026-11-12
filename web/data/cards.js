@@ -119,6 +119,13 @@ const CARD_DB = {
     landfall: "baloth",
     rules: "Trample, Haste. Landfall: Create a 4/4 Beast token with Trample."
   },
+  briarback_colossus: {
+    id: "briarback_colossus", name: "Briarback Colossus", type: "Creature", subtype: "Beast", color: "G",
+    manaCost: "{3}{G}{G}",
+    power: 5, toughness: 5, keywords: ["Trample", "Landfall"],
+    landfall: "briarback",
+    rules: "Trample. Landfall: This creature gets +2/+2 until end of turn."
+  },
   overrun: {
     id: "overrun", name: "Overrun", type: "Sorcery", color: "G",
     manaCost: "{2}{G}{G}",
@@ -139,6 +146,19 @@ const CARD_DB = {
     manaCost: "{R}",
     power: 1, toughness: 2, keywords: ["Haste", "Prowess"],
     rules: "Haste. Prowess: Gains +2/+2 and +1 Resonance whenever you cast an Instant or Sorcery."
+  },
+  emberline_daredevil: {
+    id: "emberline_daredevil", name: "Emberline Daredevil", type: "Creature", subtype: "Rogue", color: "R",
+    manaCost: "{1}{R}",
+    power: 2, toughness: 1, keywords: ["Haste", "Prowess"],
+    rules: "Haste. Prowess: Gets +2/+2 and gains +1 Resonance whenever you cast an Instant or Sorcery."
+  },
+  furnace_arc: {
+    id: "furnace_arc", name: "Furnace Arc", type: "Instant", color: "R",
+    manaCost: "{1}{R}",
+    keywords: ["Burn 3"],
+    effect: "furnace_arc",
+    rules: "Deal 3 Burn damage to the Boss and gain +1 Resonance."
   },
   goblin_guide: {
     id: "goblin_guide", name: "Goblin Guide", type: "Creature", subtype: "Goblin", color: "R",
@@ -203,6 +223,14 @@ const CARD_DB = {
     effect: "dark_ritual",
     rules: "Add {B}{B}{B} to your mana pool and +1 Resonance this turn."
   },
+  ashen_bargain: {
+    id: "ashen_bargain", name: "Ashen Bargain", type: "Instant", color: "B",
+    manaCost: "{B}",
+    lifeCost: 2,
+    keywords: ["Draw 2", "Life Cost"],
+    effect: "ashen_bargain",
+    rules: "Pay 2 Life: Draw 2 cards and gain +1 Resonance. You must have more than 2 Life to cast this."
+  },
   village_rites: {
     id: "village_rites", name: "Village Rites", type: "Instant", color: "B",
     manaCost: "{B}",
@@ -252,6 +280,20 @@ const CARD_DB = {
     keywords: ["Freeze", "Draw 1"],
     effect: "frost_breath",
     rules: "Freeze up to 2 Enemy Blockers (they cannot block or retaliate this turn!), draw 1 card, and gain +2 Resonance."
+  },
+  tideglass_sentry: {
+    id: "tideglass_sentry", name: "Tideglass Sentry", type: "Creature", subtype: "Scout", color: "U",
+    manaCost: "{1}{U}",
+    power: 1, toughness: 3, keywords: ["Flying"],
+    etb: "tideglass",
+    rules: "Flying. ETB: Freeze the strongest Enemy Blocker this turn and draw 1 card."
+  },
+  slipstream_reversal: {
+    id: "slipstream_reversal", name: "Slipstream Reversal", type: "Instant", color: "U",
+    manaCost: "{1}{U}",
+    keywords: ["Bounce"],
+    effect: "slipstream_reversal",
+    rules: "Return target Enemy Blocker to its owner's hand and gain +2 Resonance."
   },
   brainstorm: {
     id: "brainstorm", name: "Expressive Iteration", type: "Sorcery", color: "U",
@@ -304,6 +346,20 @@ const CARD_DB = {
     effect: "reinforcements",
     rules: "Create two 1/1 White Soldier tokens with Haste, then all your Creatures gain +2/+2 and Haste this turn (+2 Resonance)!"
   },
+  dawnbell_acolyte: {
+    id: "dawnbell_acolyte", name: "Dawnbell Acolyte", type: "Creature", subtype: "Cleric", color: "W",
+    manaCost: "{1}{W}",
+    power: 1, toughness: 3, keywords: ["Lifelink"],
+    etb: "dawnbell",
+    rules: "Lifelink. ETB: Heal 2 Life and gain +1 Resonance."
+  },
+  sunlit_rally: {
+    id: "sunlit_rally", name: "Sunlit Rally", type: "Sorcery", color: "W",
+    manaCost: "{2}{W}",
+    keywords: ["Tokens"],
+    effect: "sunlit_rally",
+    rules: "Create two 1/1 White Soldier tokens with Haste and gain +1 Resonance."
+  },
   serra_angel: {
     id: "serra_angel", name: "Serra Angel", type: "Creature", subtype: "Angel", color: "W",
     manaCost: "{2}{W}{W}",
@@ -334,6 +390,13 @@ const CARD_DB = {
     etb: "wayfinder",
     rules: "Haste. ETB: Mill 3 cards into your Graveyard, return a Land from your Graveyard to your Hand, and gain +1 Resonance!"
   },
+  mosswake_forager: {
+    id: "mosswake_forager", name: "Mosswake Forager", type: "Creature", subtype: "Scout", color: "G",
+    manaCost: "{1}{G}",
+    power: 2, toughness: 2, keywords: ["Dredge"],
+    etb: "mosswake",
+    rules: "ETB: Mill 2 cards, return a Land from your Graveyard to your Hand, and gain +1 Resonance."
+  },
   grisly_salvage: {
     id: "grisly_salvage", name: "Grisly Salvage", type: "Instant", color: "B",
     manaCost: "{B}{G}",
@@ -354,6 +417,13 @@ const CARD_DB = {
     keywords: ["Tokens", "Undergrowth"],
     effect: "spider_spawning",
     rules: "Undergrowth: Create a 2/2 Green Spider token with Haste & Lifelink for each Creature in your Graveyard (min 2, max 5) and gain +2 Resonance!"
+  },
+  floodplain_cartographer: {
+    id: "floodplain_cartographer", name: "Floodplain Cartographer", type: "Creature", subtype: "Scout", color: "G",
+    manaCost: "{G}{U}",
+    power: 2, toughness: 2, keywords: ["Landfall"],
+    landfall: "cartographer",
+    rules: "Landfall: This creature gets +1/+1 until end of turn and you draw a card."
   },
 
   // === COLORLESS / ARTIFACT CONSTRUCT CARDS ({C}) ===
@@ -414,6 +484,45 @@ const CARD_DB = {
     rules: "Trample, Haste. ETB: Create three 1/1 Colorless Myr Construct tokens with Haste and gain +2 Resonance!"
   }
 };
+
+const CARD_EVOLUTION_COST = 4;
+const CARD_EVOLUTION_OPTIONS = [
+  {
+    id: "veteran",
+    name: "Veteran's Might",
+    desc: "Permanently gain +3/+3.",
+    powerBonus: 3,
+    toughnessBonus: 3,
+    keywords: []
+  },
+  {
+    id: "trampler",
+    name: "Predator's Instinct",
+    desc: "Permanently gain +1/+1 and Trample.",
+    powerBonus: 1,
+    toughnessBonus: 1,
+    keywords: ["Trample"]
+  }
+];
+
+function getCardEvolutionDefinition(evolutionId) {
+  return CARD_EVOLUTION_OPTIONS.find(option => option.id === evolutionId) || null;
+}
+
+function isValidCardEvolution(card, evolutionId) {
+  return Boolean(card && card.type === "Creature" && getCardEvolutionDefinition(evolutionId));
+}
+
+function isValidCardEvolutionState(card, cardState) {
+  const option = cardState && getCardEvolutionDefinition(cardState.evolutionId);
+  return Boolean(
+    option &&
+    isValidCardEvolution(card, option.id) &&
+    Number(cardState.permPowerBonus) >= option.powerBonus &&
+    Number(cardState.permToughnessBonus) >= option.toughnessBonus &&
+    option.keywords.every(keyword => Array.isArray(cardState.keywords) && cardState.keywords.includes(keyword))
+  );
+}
 
 // === STARTER DECKS (40 CARDS: 17 LANDS + 23 SPELLS) ===
 const STARTER_DECKS = [
@@ -551,16 +660,48 @@ const STARTER_DECKS = [
       ...Array(2).fill("cyberdrive_awakener"),
       ...Array(3).fill("myr_battlesphere")
     ]
+  },
+  {
+    id: "simic_tidecallers",
+    name: "Simic Tidecallers & Landfall ({G}/{U})",
+    badge: "Simic Tidecallers ({G}/{U})",
+    colors: ["G", "U"],
+    startingRelic: "crucible_of_worlds",
+    desc: "Build a tide of Landfall creatures, then use blue tempo spells to freeze or bounce blockers while your board grows.",
+    cards: [
+      ...Array(7).fill("forest"),
+      ...Array(5).fill("island"),
+      ...Array(5).fill("evolving_wilds"),
+      ...Array(3).fill("llanowar_elves"),
+      ...Array(3).fill("lotus_cobra"),
+      ...Array(3).fill("scute_swarm"),
+      ...Array(2).fill("cultivate"),
+      ...Array(2).fill("rampaging_baloths"),
+      ...Array(2).fill("satyr_wayfinder"),
+      ...Array(2).fill("ledger_shredder"),
+      ...Array(2).fill("frost_breath"),
+      ...Array(2).fill("unsummon"),
+      ...Array(2).fill("colossal_dreadmaw")
+    ]
   }
 ];
 
 // === STARTER DECK AVAILABILITY (Separated from deck definitions so all decks remain testable) ===
-const UNLOCKED_STARTER_DECK_IDS = new Set(STARTER_DECKS.map(d => d.id));
+const STARTER_DECK_UNLOCK_REQUIREMENTS = {
+  simic_tidecallers: {
+    campaignClears: 1,
+    description: "Clear any campaign"
+  }
+};
+const UNLOCKED_STARTER_DECK_IDS = new Set(
+  STARTER_DECKS.filter(deck => !STARTER_DECK_UNLOCK_REQUIREMENTS[deck.id]).map(deck => deck.id)
+);
 
 function isStarterDeckAvailable(deckOrId) {
   const id = typeof deckOrId === "string" ? deckOrId : deckOrId?.id;
   if (!id || !STARTER_DECKS.some(d => d.id === id)) return false;
-  return UNLOCKED_STARTER_DECK_IDS.has(id);
+  if (UNLOCKED_STARTER_DECK_IDS.has(id)) return true;
+  return typeof isStarterDeckUnlockedInProfile === "function" && isStarterDeckUnlockedInProfile(id);
 }
 
 function getAvailableStarterDecks() {
@@ -649,6 +790,41 @@ const ENCOUNTERS = [
   }
 ];
 
+const RUN_CHALLENGES = [
+  {
+    id: "standard",
+    name: "Standard",
+    description: "Five turns per ward. Begin with $6.",
+    maxTurns: 5,
+    startingGoldBonus: 0,
+    extraEnemyPerWave: 0
+  },
+  {
+    id: "short_fuse",
+    name: "Short Fuse",
+    description: "Defeat each ward in four turns. Begin with +$5 gold.",
+    maxTurns: 4,
+    startingGoldBonus: 5,
+    extraEnemyPerWave: 0
+  },
+  {
+    id: "swarm_surge",
+    name: "Swarm Surge",
+    description: "Even-turn enemy waves add one blocker. Begin with +$5 gold.",
+    maxTurns: 5,
+    startingGoldBonus: 5,
+    extraEnemyOnEvenTurns: 1
+  }
+];
+
+function getRunChallengeById(id) {
+  return RUN_CHALLENGES.find(challenge => challenge.id === id) || RUN_CHALLENGES[0];
+}
+
+function normalizeRunChallengeId(id) {
+  return getRunChallengeById(id).id;
+}
+
 // === BRANCHING ENCOUNTER MAP DEFINITIONS (Part 2) ===
 const ROUTE_NODE_TYPES = {
   fight: { id: "fight", label: "Skirmish Ward", icon: "⚔️", badge: "FIGHT" },
@@ -692,10 +868,33 @@ const CAMPAIGN_ROUTE_NODES = [
     encounterIdx: 0,
     title: "Shrine of Forgotten Mana",
     subtitle: "Plane 1 • Planar Event",
-    desc: "Channel the rift's unstable spark: Claim +$7 Gold, 1 Arcane Scroll, and +3 Life.",
-    goldBonus: 7,
-    healAmount: 3,
-    grantScroll: true,
+    desc: "The shrine offers power at a price. Trade Life for Gold, spend Gold to heal, or leave without a bargain.",
+    choices: [
+      {
+        id: "blood_tithe",
+        title: "Pay 5 Life for $8 Gold",
+        desc: "Lose 5 Life and claim $8 Gold.",
+        effect: "life_for_gold",
+        requires: { lifeAbove: 5 },
+        lifeCost: 5,
+        goldGain: 8
+      },
+      {
+        id: "purify",
+        title: "Spend $5 to restore 8 Life",
+        desc: "Pay $5 Gold and restore up to 8 Life.",
+        effect: "gold_for_life",
+        requires: { minGold: 5, missingLife: true },
+        goldCost: 5,
+        healAmount: 8
+      },
+      {
+        id: "leave",
+        title: "Leave the Shrine",
+        desc: "Take no reward and pay no cost.",
+        effect: "leave"
+      }
+    ],
     next: ["p1_elite"]
   },
   {
@@ -781,3 +980,147 @@ const CAMPAIGN_ROUTE_NODES = [
     next: []
   }
 ];
+
+const DEFAULT_CAMPAIGN_ID = "blind_eternities";
+const CAMPAIGN_DEFINITIONS = [
+  {
+    id: DEFAULT_CAMPAIGN_ID,
+    name: "Blind Eternities",
+    description: "Follow the familiar two-plane route through escalating wards to the Grand Cenobite.",
+    ending: "You conquered the Blind Eternities and saved the Multiverse.",
+    victoryBadge: "PLANE 2 CONQUERED • MULTIVERSE SAVED",
+    encounters: ENCOUNTERS,
+    routeNodes: CAMPAIGN_ROUTE_NODES
+  },
+  {
+    id: "riftfall",
+    name: "Riftfall",
+    description: "Cross a collapsing realm where the final Warden combines draining rites with relentless reinforcements.",
+    ending: "You sealed the Riftfall and restored the fractured realm.",
+    victoryBadge: "RIFTFALL SEALED • REALM RESTORED",
+    encounters: [
+      {
+        plane: 1, tier: "SKIRMISH WARD", name: "Riftling Broodmother", maxLife: 74, reward: 7,
+        rule: "BROOD SURGE: A Riftling joins each turn; the brood doubles on Turn 4+.",
+        spawn: { name: "Riftling", power: 2, toughness: 2, color: "B", keywords: [] },
+        stampedeTurn: 4
+      },
+      {
+        plane: 1, tier: "ELITE WARD", name: "Ashen Vanguard", maxLife: 116, reward: 8,
+        rule: "EMBER HOST: One Ashen Guard joins on odd turns and two join on even turns.",
+        spawn: { name: "Ashen Guard", power: 2, toughness: 2, color: "R", keywords: [], count: 1 },
+        evenTurnDoubleSpawn: true
+      },
+      {
+        plane: 1, tier: "PLANAR OVERLORD", name: "Shardbound Tyrant", maxLife: 158, reward: 11,
+        rule: "SHARD DRAIN: Spawns a 3/4 Shard Sentinel, drains 1 Life each turn, and resists half of direct Burn.",
+        spawn: { name: "Shard Sentinel", power: 3, toughness: 4, color: "C", keywords: [] },
+        staxDrain: 1,
+        burnResistance: 0.5
+      },
+      {
+        plane: 2, tier: "SKIRMISH WARD", name: "Aetherstorm Sentinel", maxLife: 232, reward: 12,
+        rule: "AETHER WARD: Spawns a 3/3 Flying Wisp each turn and taxes the first spell each turn until you control 4+ Lands.",
+        spawn: { name: "Aether Wisp", power: 3, toughness: 3, color: "U", keywords: ["Flying"] },
+        spellWardTax: true
+      },
+      {
+        plane: 2, tier: "ELITE WARD", name: "Worldroot Colossus", maxLife: 360, reward: 14,
+        rule: "WORLDROOT HIDE: Immune to direct Burn; a 4/4 Rootguard joins each turn and surviving Blockers hit harder.",
+        spawn: { name: "Rootguard", power: 4, toughness: 4, color: "G", keywords: [] },
+        burnImmune: true,
+        staxHideBonus: 1
+      },
+      {
+        plane: 2, tier: "PLANAR OVERLORD", name: "The Void Architect", maxLife: 570, reward: 18,
+        rule: "VOID ENGINE: Spawns a 4/5 Void Guard each turn, reinforces on even turns, drains 1 Life, and resists half of direct Burn.",
+        spawn: { name: "Void Guard", power: 4, toughness: 5, color: "C", keywords: [], count: 1 },
+        staxDrain: 1,
+        burnResistance: 0.5,
+        evenTurnBonusGuard: 1
+      }
+    ],
+    routeNodes: CAMPAIGN_ROUTE_NODES.map(node => {
+      const story = {
+        p1_start: {
+          title: "Riftfall Border",
+          subtitle: "Plane 1 • Rift Skirmish",
+          desc: "Hold the border against the first wave spilling from the fracture."
+        },
+        p1_upper_rest: {
+          title: "Sunwell Refuge",
+          subtitle: "Plane 1 • Rest Site",
+          desc: "Recover at the sunwell and temper a Creature before the Rift Devourer."
+        },
+        p1_lower_event: {
+          title: "Fractured Shrine",
+          subtitle: "Plane 1 • Planar Event",
+          desc: "A broken shrine offers power for Life, healing for Gold, or a safe retreat."
+        },
+        p1_elite: {
+          title: "Rift Devourer",
+          subtitle: "Plane 1 • Elite Ward",
+          desc: "Break the Devourer's reinforced guard before it can consume the border."
+        },
+        p1_boss: {
+          title: "Shardbound Tyrant",
+          subtitle: "Plane 1 • Planar Overlord",
+          desc: "Defeat the Tyrant to cross into the collapsing heart of Riftfall."
+        },
+        p2_entry_fight: {
+          title: "Aetherstorm Sentinel",
+          subtitle: "Plane 2 • Skirmish Ward",
+          desc: "Push through the storm and its spell-taxing Aether Wisp patrols."
+        },
+        p2_entry_shop: {
+          title: "Driftwood Caravan",
+          subtitle: "Plane 2 • Sanctum Outpost",
+          desc: "Trade combat bounty for a safer crossing, a small stipend, and a Sanctum visit."
+        },
+        p2_mid_elite: {
+          title: "Worldroot Colossus",
+          subtitle: "Plane 2 • Elite Ward",
+          desc: "Outlast the burn-proof Colossus and its heavy Rootguard."
+        },
+        p2_mid_rest: {
+          title: "The Quiet Spire",
+          subtitle: "Plane 2 • Rest Site",
+          desc: "Restore Life, gather Gold, and temper a Creature before the final breach."
+        },
+        p2_boss: {
+          title: "The Void Architect",
+          subtitle: "Plane 2 • Final Warden",
+          desc: "Shatter the Void Engine's draining rites and reinforcements to seal Riftfall."
+        }
+      }[node.id];
+      return {
+        ...node,
+        ...(story || {}),
+        next: [...(node.next || [])],
+        ...(Array.isArray(node.choices)
+          ? { choices: node.choices.map(choice => ({ ...choice, ...(choice.requires ? { requires: { ...choice.requires } } : {}) })) }
+          : {})
+      };
+    })
+  }
+];
+
+function getCampaignById(campaignId) {
+  const id = typeof campaignId === "string" ? campaignId : DEFAULT_CAMPAIGN_ID;
+  return CAMPAIGN_DEFINITIONS.find(campaign => campaign.id === id) ||
+    CAMPAIGN_DEFINITIONS.find(campaign => campaign.id === DEFAULT_CAMPAIGN_ID);
+}
+
+function normalizeCampaignId(campaignId) {
+  return CAMPAIGN_DEFINITIONS.some(campaign => campaign.id === campaignId)
+    ? campaignId
+    : DEFAULT_CAMPAIGN_ID;
+}
+
+function getCampaignEncounters(campaignId) {
+  return getCampaignById(campaignId).encounters;
+}
+
+function getCampaignRouteNodes(campaignId) {
+  return getCampaignById(campaignId).routeNodes;
+}

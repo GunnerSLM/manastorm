@@ -1,0 +1,37 @@
+[
+  {
+    "id": "black_lotus",
+    "name": "Black Lotus",
+    "icon": "🌸",
+    "cost": 4,
+    "desc": "Sacrifice: Add +3 Any-Color Wild Mana (★ Wild ×3) and +1 Resonance this turn."
+  },
+  {
+    "id": "time_walk",
+    "name": "Time Walk",
+    "icon": "⏳",
+    "cost": 5,
+    "desc": "Sacrifice: Gain +1 Extra Turn on the Turn Clock, draw 1 card, and gain +1 Resonance."
+  },
+  {
+    "id": "wrath_of_god",
+    "name": "Wrath of God",
+    "icon": "☀️",
+    "cost": 5,
+    "desc": "Sacrifice: Destroy ALL Enemy Blockers and gain +2 Resonance."
+  },
+  {
+    "id": "demonic_tutor",
+    "name": "Demonic Tutor",
+    "icon": "📜",
+    "cost": 4,
+    "desc": "Sacrifice: Search your Library for ANY card and put it directly into your Hand!"
+  },
+  {
+    "id": "wheel_of_fortune",
+    "name": "Wheel of Fortune",
+    "icon": "🎡",
+    "cost": 4,
+    "desc": "Sacrifice: Discard your Hand, draw 5 fresh cards, and gain +2 Resonance."
+  }
+]

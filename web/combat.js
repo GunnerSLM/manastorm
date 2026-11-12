@@ -19,8 +19,18 @@ function toggleCreatureAttack(creatureUid) {
     spawnFx("Summoning Sick! Needs Haste to attack Turn 1.", "#98a4c0");
     return;
   }
+  const previousDamage = calculateProjectedCombat().totalDamage;
   c.attacking = !c.attacking;
+  const projectedCombat = calculateProjectedCombat();
   renderAll();
+  if (typeof showAttackerProjectionFeedback === "function") {
+    showAttackerProjectionFeedback(
+      creatureUid,
+      projectedCombat.totalDamage - previousDamage,
+      projectedCombat.totalDamage,
+      c.attacking
+    );
+  }
 }
 
 function getEffectiveBurnPower(rawBurn, enc) {
@@ -86,6 +96,7 @@ function calculateProjectedCombat() {
   const burnInfo = getEffectiveBurnPower(state.turnBurnPower, enc);
   let unblockedCreaturePower = 0;
   const attackerDamageByName = {};
+  const attackerDamageByUid = {};
   let lifelinkHeal = 0;
 
   attackers.forEach(att => {
@@ -93,7 +104,8 @@ function calculateProjectedCombat() {
       attackerAssignments[att.sourceUid] = {
         blockedCount: 0,
         deadCount: 0,
-        blockerNames: []
+        blockerNames: [],
+        damageToBoss: 0
       };
     }
 
@@ -153,6 +165,8 @@ function calculateProjectedCombat() {
 
     if (dmgToBoss > 0) {
       attackerDamageByName[att.name] = (attackerDamageByName[att.name] || 0) + dmgToBoss;
+      attackerDamageByUid[att.sourceUid] = (attackerDamageByUid[att.sourceUid] || 0) + dmgToBoss;
+      attackerAssignments[att.sourceUid].damageToBoss += dmgToBoss;
     }
     unblockedCreaturePower += dmgToBoss;
     if (hasLifelink) lifelinkHeal += att.power;
@@ -223,6 +237,7 @@ function calculateProjectedCombat() {
     deadAttackerCountsByUid,
     blockerAssignments,
     attackerAssignments,
+    attackerDamageByUid,
     powerBreakdown,
     resonanceBreakdown
   };
@@ -230,15 +245,37 @@ function calculateProjectedCombat() {
 
 function executeCombatAndEndTurn() {
   if (state.enemyLife <= 0 || state.runOver || state.combatLocked) return;
+  state.runTurns = Math.max(0, Math.floor(Number(state.runTurns) || 0)) + 1;
 
   const combat = calculateProjectedCombat();
-
+  recordCombatEvent(
+    "combat",
+    `Attack resolved: ${combat.power} power × ${combat.mult} resonance = ${combat.totalDamage} damage.`,
+    { power: combat.power, resonance: combat.mult, damage: combat.totalDamage }
+  );
+  Object.entries(combat.blockerAssignments).forEach(([blockerUid, assignment]) => {
+    const blocker = state.enemyCreatures.find(creature => creature.uid === blockerUid);
+    const outcome = assignment.dies ? "was destroyed" : "survived";
+    recordCombatEvent(
+      "blocker",
+      `${blocker?.name || "Enemy blocker"} blocked ${assignment.attackerName} and ${outcome}${assignment.trampleOver > 0 ? `; ${assignment.trampleOver} trample damage got through` : ""}.`,
+      { blockerUid, attackerName: assignment.attackerName, destroyed: assignment.dies, trampleDamage: assignment.trampleOver }
+    );
+  });
   if (combat.lifelinkHeal > 0) {
     const healed = gainLife(combat.lifelinkHeal, "Lifelink");
     spawnFx(`Lifelink: +${healed > 0 ? healed : combat.lifelinkHeal} Life!`, "#26d07c");
   }
 
   state.enemyLife = Math.max(0, state.enemyLife - combat.totalDamage);
+  recordCombatEvent("damage", `Player dealt ${combat.totalDamage} damage to ${getCurrentEncounter().name}.`, {
+    damage: combat.totalDamage,
+    target: getCurrentEncounter().name,
+    lifeRemaining: state.enemyLife
+  });
+  if (combat.attackersCount > 0 && typeof playSoundCue === "function") {
+    playSoundCue("impact");
+  }
   spawnFx(`⚔️ ${combat.power} × ${combat.mult} = ${combat.totalDamage} DMG!`, "#ffd466");
 
   // Remove enemy blockers killed in combat
@@ -250,6 +287,12 @@ function executeCombatAndEndTurn() {
   const survivingPlayerCreatures = [];
   for (const c of state.playerCreatures) {
     const deadCount = combat.deadAttackerCountsByUid[c.uid] || 0;
+    if (deadCount > 0) {
+      recordCombatEvent("combat", `${deadCount} ${c.name} ${deadCount === 1 ? "creature fell" : "creatures fell"} in combat.`, {
+        creature: c.name,
+        count: deadCount
+      });
+    }
     if (deadCount > 0 && !c.isToken) {
       for (let i = 0; i < deadCount; i++) {
         pushToGraveyard(creatureToCard(c));
@@ -287,13 +330,21 @@ function executeCombatAndEndTurn() {
     const prevLife = state.playerLife;
     if (enemyAttack > 0) {
       state.playerLife = Math.max(0, state.playerLife - enemyAttack);
+      recordCombatEvent("damage", `Enemy retaliation dealt ${enemyAttack} damage (${prevLife} → ${state.playerLife} Life).`, {
+        damage: enemyAttack,
+        lifeBefore: prevLife,
+        lifeAfter: state.playerLife
+      });
       spawnFx(`🛡️ Enemy Retaliation: -${enemyAttack} HP!`, "#ff4757");
+    } else {
+      recordCombatEvent("turn", "Enemy forces did not retaliate this turn.");
     }
 
     // Thaw frozen blockers after enemy combat step
     state.enemyCreatures.forEach(b => { b.frozen = false; });
 
     if (state.turn >= state.maxTurns || state.playerLife <= 0) {
+      recordCombatEvent("turn", `Turn ${state.turn} ended.`, { turn: state.turn });
       if (enemyAttack > 0) {
         setLog(`Turn ${state.turn} Retaliation: ${retalParts.join(" + ")} dealt ${enemyAttack} DMG (Life: ${prevLife} → ${state.playerLife}).`);
       }
@@ -312,7 +363,10 @@ function executeCombatAndEndTurn() {
   };
 
   // In interactive browser mode, play a short enemy retaliation animation when enemies strike back
-  if (!state.headless && typeof document !== "undefined" && enemyAttack > 0) {
+  const retaliationDelay = typeof getCombatAnimationDelay === "function"
+    ? getCombatAnimationDelay(420)
+    : 420;
+  if (!state.headless && typeof document !== "undefined" && enemyAttack > 0 && retaliationDelay > 0) {
     state.combatLocked = true;
     renderAll();
     const enemyCards = document.querySelectorAll("#enemy-creatures .board-card:not(.frozen-card)");
@@ -324,23 +378,39 @@ function executeCombatAndEndTurn() {
     setTimeout(() => {
       if (lifeChip) lifeChip.classList.remove("life-hit-flash");
       finishEndOfTurn();
-    }, 420);
+    }, retaliationDelay);
   } else {
     finishEndOfTurn();
   }
 }
 
-function spawnEnemyWave(enc) {
+function getEnemyWaveSpawnCount(enc, turn = state.turn, existingCount = state.enemyCreatures.length) {
+  if (!enc || !enc.spawn) return 0;
+
   let count = enc.spawn.count || 1;
-  if (enc.evenTurnDoubleSpawn && state.turn % 2 === 0) {
+  if (enc.evenTurnDoubleSpawn && turn % 2 === 0) {
     count *= 2;
   }
-  if (enc.stampedeTurn && state.turn >= enc.stampedeTurn) {
+  if (enc.stampedeTurn && turn >= enc.stampedeTurn) {
     count += 1;
   }
-  if (enc.evenTurnBonusGuard && state.turn % 2 === 0) {
+  if (enc.evenTurnBonusGuard && turn % 2 === 0) {
     count += enc.evenTurnBonusGuard;
   }
+  const challenge = typeof getRunChallengeById === "function"
+    ? getRunChallengeById(state.challengeId)
+    : null;
+  if (challenge && challenge.extraEnemyPerWave) {
+    count += challenge.extraEnemyPerWave;
+  }
+  if (challenge && challenge.extraEnemyOnEvenTurns && turn % 2 === 0) {
+    count += challenge.extraEnemyOnEvenTurns;
+  }
+  return Math.max(0, Math.min(count, 5 - Math.max(0, existingCount)));
+}
+
+function spawnEnemyWave(enc) {
+  const count = getEnemyWaveSpawnCount(enc, state.turn, state.enemyCreatures.length);
 
   const bonusTough = enc.cenobiteAura || 0;
   for (let i = 0; i < count; i++) {

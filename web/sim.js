@@ -176,9 +176,18 @@ function playAiTurn() {
   executeCombatAndEndTurn();
 }
 
-function simulateSingleEncounter(deckConfig, encounterIdx, extraRelicIds = []) {
+function simulateSingleEncounter(deckConfig, encounterIdx, extraRelicIds = [], evolutionId = null) {
   state.deckArchetype = deckConfig;
   state.masterDeck = deckConfig.cards.map(id => cloneCard(id));
+  if (evolutionId) {
+    const target = state.masterDeck
+      .filter(card => getAvailableCardEvolutionOptions(card).some(option => option.id === evolutionId))
+      .sort((a, b) =>
+        ((b.power || 0) + (b.permPowerBonus || 0)) -
+        ((a.power || 0) + (a.permPowerBonus || 0))
+      )[0];
+    if (target) applyCardEvolutionToCard(target, evolutionId);
+  }
   state.relics = [];
   const startRelic = RELIC_DB.find(r => r.id === deckConfig.startingRelic);
   if (startRelic) state.relics.push({ ...startRelic });
@@ -190,6 +199,8 @@ function simulateSingleEncounter(deckConfig, encounterIdx, extraRelicIds = []) {
   });
   state.consumables = encounterIdx === 0 ? [{ ...CONSUMABLE_DB[0], uid: nextUid() }] : [];
   state.encounterIdx = encounterIdx;
+  state.challengeId = "standard";
+  state.route = normalizeRouteState(null, encounterIdx, false);
   state.playerLife = START_LIFE;
   state.gold = 6;
   state.synTiers = {};
@@ -286,15 +297,30 @@ function aiDraftStep() {
   }
 }
 
-function simulateFullCampaign(deckConfig) {
-  startNewRun(deckConfig);
-  const cleared = [false, false, false, false, false, false];
-
-  for (let encIdx = 0; encIdx < ENCOUNTERS.length; encIdx++) {
-    state.encounterIdx = encIdx;
-    if (encIdx > 0) {
+function simulateFullCampaign(deckConfig, evolutionId = null, challengeId = "standard", campaignId = DEFAULT_CAMPAIGN_ID) {
+  startNewRun(deckConfig, challengeId, campaignId, null, { allowLockedDeck: true });
+  if (evolutionId) {
+    const target = state.masterDeck
+      .filter(card => getAvailableCardEvolutionOptions(card).some(option => option.id === evolutionId))
+      .sort((a, b) =>
+        ((b.power || 0) + (b.permPowerBonus || 0)) -
+        ((a.power || 0) + (a.permPowerBonus || 0))
+      )[0];
+    if (target && applyCardEvolutionToCard(target, evolutionId)) {
       beginEncounter();
     }
+  }
+  const campaignEncounters = getActiveCampaignEncounters();
+  const cleared = new Array(campaignEncounters.length).fill(false);
+  const nextRouteStops = [
+    ["p1_upper_rest", "p1_elite"],
+    ["p1_boss"],
+    ["p2_entry_fight"],
+    ["p2_mid_elite"],
+    ["p2_boss"]
+  ];
+
+  for (let encIdx = 0; encIdx < campaignEncounters.length; encIdx++) {
     let guard = 0;
     while (state.enemyLife > 0 && !state.runOver && guard++ < 15) {
       playAiTurn();
@@ -303,6 +329,11 @@ function simulateFullCampaign(deckConfig) {
       cleared[encIdx] = true;
       aiDraftStep();
       aiShopStep();
+      for (const nodeId of nextRouteStops[encIdx] || []) {
+        if (!selectRouteNode(nodeId)) {
+          throw new Error(`Campaign simulator could not select route node ${nodeId} after encounter ${encIdx}.`);
+        }
+      }
     } else {
       break;
     }
@@ -340,6 +371,18 @@ STARTER_DECKS.forEach(deck => {
   console.log(row);
 });
 
+const N_ALTERNATE_CAMPAIGNS = 400;
+const alternateCampaign = getCampaignById("riftfall");
+console.log(`\n=== ALTERNATE CAMPAIGN BALANCE (${alternateCampaign.name}, ${N_ALTERNATE_CAMPAIGNS} RUNS / DECK) ===`);
+STARTER_DECKS.forEach(deck => {
+  let wins = 0;
+  for (let i = 0; i < N_ALTERNATE_CAMPAIGNS; i++) {
+    const cleared = simulateFullCampaign(deck, null, "standard", alternateCampaign.id);
+    if (cleared.every(Boolean)) wins++;
+  }
+  console.log(`${deck.badge.padEnd(28)} ${((wins / N_ALTERNATE_CAMPAIGNS) * 100).toFixed(1)}% full-campaign clear rate`);
+});
+
 // Relic Impact Benchmark on Encounter 2 (Krenko) & Encounter 3 (Sheoldred)
 console.log(`\n=== RELIC MARGINAL IMPACT vs PRICE ANALYSIS (Across All ${STARTER_DECKS.length} Starter Decks, E3 Sheoldred) ===`);
 const N_RELIC_SIMS = 400;
@@ -356,6 +399,30 @@ function measureRelicWinRate(extraRelicId) {
   return (wins / (perDeck * STARTER_DECKS.length)) * 100;
 }
 
+function measureEvolutionWinRate(evolutionId) {
+  let wins = 0;
+  const perDeck = Math.floor(N_EVOLUTION_SIMS / STARTER_DECKS.length);
+  STARTER_DECKS.forEach(deck => {
+    for (let i = 0; i < perDeck; i++) {
+      const res = simulateSingleEncounter(deck, 2, [], evolutionId);
+      if (res.won) wins++;
+    }
+  });
+  return (wins / (perDeck * STARTER_DECKS.length)) * 100;
+}
+
+function measureFullCampaignEvolutionWinRate(evolutionId) {
+  let wins = 0;
+  STARTER_DECKS.forEach(deck => {
+    for (let i = 0; i < N_CAMPAIGNS; i++) {
+      const cleared = simulateFullCampaign(deck, evolutionId);
+      if (cleared[cleared.length - 1]) wins++;
+    }
+  });
+  return (wins / (N_CAMPAIGNS * STARTER_DECKS.length)) * 100;
+}
+
+const N_EVOLUTION_SIMS = 2400;
 const baselineE3 = measureRelicWinRate(null);
 console.log(`Baseline Starter Deck Win Rate vs E3 (No Extra Relic): ${baselineE3.toFixed(1)}%\n`);
 console.log("Relic Name".padEnd(26) + "Price".padEnd(8) + "E3 Win%".padEnd(10) + "Delta".padEnd(10) + "Win% per $1");
@@ -371,5 +438,50 @@ RELIC_DB.forEach(relic => {
     `${wr.toFixed(1)}%`.padEnd(10) +
     `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%`.padEnd(10) +
     `${eff >= 0 ? "+" : ""}${eff.toFixed(2)}%/$`
+  );
+});
+
+console.log(`\n=== CARD EVOLUTION MARGINAL IMPACT vs PRICE (Across All ${STARTER_DECKS.length} Starter Decks, E3 Sheoldred) ===`);
+console.log("Evolution".padEnd(26) + "Price".padEnd(8) + "E3 Win%".padEnd(10) + "Delta".padEnd(10) + "Win% per $1");
+console.log("-".repeat(68));
+const evolutionBaselineE3 = measureEvolutionWinRate(null);
+console.log(`Baseline at ${N_EVOLUTION_SIMS} simulations: ${evolutionBaselineE3.toFixed(1)}%\n`);
+
+["veteran", "trampler"].forEach(evolutionId => {
+  const winRate = measureEvolutionWinRate(evolutionId);
+  const definition = getCardEvolutionDefinition(evolutionId);
+  const delta = winRate - evolutionBaselineE3;
+  console.log(
+    `${definition.name}`.padEnd(26) +
+    `$${CARD_EVOLUTION_COST}`.padEnd(8) +
+    `${winRate.toFixed(1)}%`.padEnd(10) +
+    `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}pp`.padEnd(10) +
+    `${(delta / CARD_EVOLUTION_COST).toFixed(2)}pp`
+  );
+});
+
+console.log(`\n=== CHALLENGE MODE CLEAR RATE (${STARTER_DECKS.length} STARTER DECKS) ===`);
+const N_CHALLENGE_CAMPAIGNS = 200;
+RUN_CHALLENGES.filter(challenge => challenge.id !== "standard").forEach(challenge => {
+  let wins = 0;
+  STARTER_DECKS.forEach(deck => {
+    for (let i = 0; i < N_CHALLENGE_CAMPAIGNS; i++) {
+      const cleared = simulateFullCampaign(deck, null, challenge.id);
+      if (cleared[cleared.length - 1]) wins++;
+    }
+  });
+  const total = N_CHALLENGE_CAMPAIGNS * STARTER_DECKS.length;
+  console.log(`${challenge.name.padEnd(18)} ${((wins / total) * 100).toFixed(1)}% full-campaign clear rate (${total} campaigns)`);
+});
+
+console.log(`\n=== FULL-CAMPAIGN IMPACT OF ONE EVOLUTION (${N_CAMPAIGNS} CAMPAIGNS / DECK) ===`);
+const baselineCampaignWinRate = measureFullCampaignEvolutionWinRate(null);
+console.log(`Baseline full-campaign clear rate: ${baselineCampaignWinRate.toFixed(1)}%`);
+["veteran", "trampler"].forEach(evolutionId => {
+  const winRate = measureFullCampaignEvolutionWinRate(evolutionId);
+  const delta = winRate - baselineCampaignWinRate;
+  console.log(
+    `${getCardEvolutionDefinition(evolutionId).name}: ${winRate.toFixed(1)}% ` +
+    `(${delta >= 0 ? "+" : ""}${delta.toFixed(1)}pp vs baseline)`
   );
 });

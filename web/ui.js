@@ -7,6 +7,55 @@ let targetDialogActive = false;
 const targetDialogQueue = [];
 let newRunForceChoice = false;
 let routeForceChoice = false;
+let invalidPlayFeedbackTimer = null;
+const invalidCardFeedbackTimers = new WeakMap();
+const dropZoneSuccessTimers = new WeakMap();
+let projectionFeedbackTimer = null;
+let projectionPulseTimer = null;
+let lastProjectionSource = null;
+let lastProjectionTally = null;
+let ambientVisibilityListenerInitialized = false;
+let routeSelectionPending = false;
+const resourceFeedbackTimers = new WeakMap();
+const rewardFeedbackTimers = new WeakMap();
+const pendingShopRewardHighlights = new Set();
+const pendingRelicRewardHighlights = new Set();
+let soundAudioContext = null;
+let soundMasterGain = null;
+let soundStatusMessage = "Sound is muted until you enable it.";
+let soundStatusIsError = false;
+let soundStatusToastTimer = null;
+
+const SOUND_CUES = {
+  cardPlay: [{ frequency: 440, duration: 0.11, waveform: "triangle", level: 0.58 }],
+  manaTap: [{ frequency: 660, duration: 0.08, waveform: "sine", level: 0.5 }],
+  impact: [
+    { frequency: 150, duration: 0.14, waveform: "sine", level: 0.62 },
+    { frequency: 245, duration: 0.1, waveform: "triangle", level: 0.22, offset: 0.025 }
+  ],
+  victory: [
+    { frequency: 523, duration: 0.18, waveform: "sine", level: 0.48, offset: 0 },
+    { frequency: 659, duration: 0.19, waveform: "sine", level: 0.48, offset: 0.12 },
+    { frequency: 784, duration: 0.26, waveform: "triangle", level: 0.48, offset: 0.24 }
+  ],
+  defeat: [
+    { frequency: 392, duration: 0.22, waveform: "sawtooth", level: 0.45, offset: 0 },
+    { frequency: 311, duration: 0.24, waveform: "sawtooth", level: 0.45, offset: 0.15 },
+    { frequency: 220, duration: 0.35, waveform: "sine", level: 0.55, offset: 0.32 }
+  ],
+  shopBuy: [
+    { frequency: 587, duration: 0.09, waveform: "triangle", level: 0.42, offset: 0 },
+    { frequency: 880, duration: 0.14, waveform: "sine", level: 0.45, offset: 0.07 }
+  ],
+  relicTrigger: [
+    { frequency: 880, duration: 0.12, waveform: "sine", level: 0.45, offset: 0 },
+    { frequency: 1174, duration: 0.16, waveform: "triangle", level: 0.4, offset: 0.08 }
+  ],
+  cardPurge: [
+    { frequency: 320, duration: 0.15, waveform: "sawtooth", level: 0.45, offset: 0 },
+    { frequency: 160, duration: 0.22, waveform: "sine", level: 0.5, offset: 0.08 }
+  ]
+};
 
 function isHeadlessEnv() {
   return Boolean((typeof state !== "undefined" && state.headless) || typeof document === "undefined");
@@ -162,14 +211,14 @@ function openColorPickerModal(title, desc, choices, allowCancel = false) {
   safeShowModal(dialog);
 }
 
-function openTargetPickerModal(title, desc, items, renderItemHtml, onPick) {
+function openTargetPickerModal(title, desc, items, renderItemHtml, onPick, options = {}) {
   if (!Array.isArray(items) || items.length === 0) return;
   if (items.length === 1 || isHeadlessEnv()) {
     onPick(items[0]);
     return;
   }
 
-  const request = { title, desc, items, renderItemHtml, onPick };
+  const request = { title, desc, items, renderItemHtml, onPick, allowCancel: Boolean(options.allowCancel) };
   if (targetDialogActive) {
     targetDialogQueue.push(request);
     return;
@@ -177,11 +226,12 @@ function openTargetPickerModal(title, desc, items, renderItemHtml, onPick) {
   showTargetPickerModal(request);
 }
 
-function showTargetPickerModal({ title, desc, items, renderItemHtml, onPick }) {
+function showTargetPickerModal(request) {
+  const { title, desc, items, renderItemHtml, onPick, allowCancel = false } = request;
   const dialog = getEl("target-dialog");
   const grid = getEl("target-dialog-grid");
   if (!dialog || !grid) {
-    onPick(items[0]);
+    if (!allowCancel) onPick(items[0]);
     renderAll();
     return;
   }
@@ -190,7 +240,7 @@ function showTargetPickerModal({ title, desc, items, renderItemHtml, onPick }) {
   setText("target-dialog-title", title);
   setText("target-dialog-desc", desc);
 
-  targetDialogPendingFallback = () => {
+  targetDialogPendingFallback = allowCancel ? null : () => {
     onPick(items[0]);
     renderAll();
   };
@@ -249,6 +299,356 @@ function prefersReducedMotion() {
     window.matchMedia &&
     window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
+}
+
+function getCombatAnimationDelay(baseDelayMs) {
+  const delay = Number(baseDelayMs);
+  if (!Number.isFinite(delay) || delay <= 0 || prefersReducedMotion()) return 0;
+  const speed = typeof DesktopBridge !== "undefined"
+    ? DesktopBridge.getSettings()?.combatSpeed
+    : "normal";
+  const multiplier = speed === "instant" ? 0 : (speed === "fast" ? 0.45 : 1);
+  return multiplier === 0 ? 0 : Math.max(1, Math.round(delay * multiplier));
+}
+
+function setSoundStatusMessage(message, isError = false) {
+  soundStatusMessage = String(message || "");
+  soundStatusIsError = Boolean(isError);
+  const status = getEl("settings-sound-status");
+  if (status) {
+    status.textContent = soundStatusMessage;
+    status.classList.toggle("error", Boolean(isError));
+  }
+  const toast = getEl("sound-feedback-status");
+  if (toast) {
+    if (soundStatusToastTimer) clearTimeout(soundStatusToastTimer);
+    toast.hidden = !isError;
+    toast.textContent = isError ? soundStatusMessage : "";
+    toast.classList.toggle("error", Boolean(isError));
+    if (isError) {
+      if (typeof ensureFxLayerTop === "function") ensureFxLayerTop();
+      soundStatusToastTimer = setTimeout(() => {
+        toast.hidden = true;
+        soundStatusToastTimer = null;
+      }, 6000);
+    } else {
+      soundStatusToastTimer = null;
+    }
+  }
+  if (isError && typeof showSettingsStatusMessage === "function") {
+    showSettingsStatusMessage(soundStatusMessage, true);
+  }
+}
+
+function getSoundAudioContext() {
+  if (soundAudioContext) return soundAudioContext;
+  const AudioContextConstructor = typeof window !== "undefined"
+    ? (window.AudioContext || window.webkitAudioContext)
+    : null;
+  if (typeof AudioContextConstructor !== "function") {
+    setSoundStatusMessage("Sound is unavailable in this browser. Visual feedback remains enabled.", true);
+    return null;
+  }
+  try {
+    soundAudioContext = new AudioContextConstructor();
+    soundMasterGain = soundAudioContext.createGain();
+    soundMasterGain.gain.value = 0;
+    soundMasterGain.connect(soundAudioContext.destination);
+    return soundAudioContext;
+  } catch (error) {
+    soundAudioContext = null;
+    soundMasterGain = null;
+    console.error("Unable to initialize MANASTORM sound feedback.", error);
+    setSoundStatusMessage("Sound could not be initialized. Visual feedback remains enabled.", true);
+    return null;
+  }
+}
+
+function applySoundOutputSettings() {
+  if (!soundAudioContext || !soundMasterGain || typeof DesktopBridge === "undefined") return;
+  const settings = DesktopBridge.getSettings();
+  const targetGain = settings.soundEnabled ? Math.max(0, Math.min(1, settings.soundVolume)) * 0.18 : 0;
+  const gain = soundMasterGain.gain;
+  if (typeof gain.cancelScheduledValues === "function") {
+    gain.cancelScheduledValues(soundAudioContext.currentTime);
+  }
+  if (typeof gain.setTargetAtTime === "function") {
+    gain.setTargetAtTime(targetGain, soundAudioContext.currentTime, 0.025);
+  } else {
+    gain.value = targetGain;
+  }
+}
+
+function unlockSoundFromUserGesture() {
+  const context = getSoundAudioContext();
+  if (!context) return Promise.resolve(false);
+  if (context.state === "running") {
+    applySoundOutputSettings();
+    return Promise.resolve(true);
+  }
+  if (context.state === "closed" || typeof context.resume !== "function") {
+    setSoundStatusMessage("Sound could not start. Try enabling Sound Effects again.", true);
+    return Promise.resolve(false);
+  }
+  let resumeResult;
+  try {
+    resumeResult = context.resume();
+  } catch (error) {
+    console.error("Unable to resume MANASTORM sound feedback.", error);
+    setSoundStatusMessage("Sound could not start. Try enabling Sound Effects again.", true);
+    return Promise.resolve(false);
+  }
+  return Promise.resolve(resumeResult).then(() => {
+    if (context.state !== "running") {
+      setSoundStatusMessage("Sound is still unavailable. Try enabling Sound Effects again.", true);
+      return false;
+    }
+    applySoundOutputSettings();
+    return true;
+  }).catch(error => {
+    console.error("Unable to resume MANASTORM sound feedback.", error);
+    setSoundStatusMessage("Sound could not start. Try enabling Sound Effects again.", true);
+    return false;
+  });
+}
+
+function scheduleSoundCue(context, cueName) {
+  const tones = SOUND_CUES[cueName];
+  if (!Array.isArray(tones) || !soundMasterGain) return false;
+  applySoundOutputSettings();
+  const now = context.currentTime;
+  tones.forEach(tone => {
+    const oscillator = context.createOscillator();
+    const envelope = context.createGain();
+    const startAt = now + (tone.offset || 0);
+    const endAt = startAt + tone.duration;
+    oscillator.type = tone.waveform;
+    oscillator.frequency.setValueAtTime(tone.frequency, startAt);
+    envelope.gain.setValueAtTime(0.0001, startAt);
+    envelope.gain.linearRampToValueAtTime(tone.level, startAt + 0.008);
+    envelope.gain.exponentialRampToValueAtTime(0.0001, endAt);
+    oscillator.connect(envelope);
+    envelope.connect(soundMasterGain);
+    oscillator.start(startAt);
+    oscillator.stop(endAt + 0.01);
+  });
+  return true;
+}
+
+function playSoundCue(cueName) {
+  if (isHeadlessEnv() || !SOUND_CUES[cueName] || typeof DesktopBridge === "undefined") return false;
+  const settings = DesktopBridge.getSettings();
+  if (!settings.soundEnabled || settings.soundVolume <= 0) return false;
+  const context = getSoundAudioContext();
+  if (!context) return false;
+  if (context.state === "running") {
+    try {
+      return scheduleSoundCue(context, cueName);
+    } catch (error) {
+      console.error(`Unable to play MANASTORM ${cueName} sound.`, error);
+      setSoundStatusMessage("Sound could not be played. Visual feedback remains enabled.", true);
+      return false;
+    }
+  }
+  unlockSoundFromUserGesture().then(ready => {
+    if (!ready) return;
+    try {
+      scheduleSoundCue(context, cueName);
+    } catch (error) {
+      console.error(`Unable to play MANASTORM ${cueName} sound.`, error);
+      setSoundStatusMessage("Sound could not be played. Visual feedback remains enabled.", true);
+    }
+  });
+  return true;
+}
+
+function setResourceText(id, text) {
+  const el = getEl(id);
+  if (!el) return false;
+  const nextText = String(text ?? "");
+  const previousTarget = el.dataset.resourceValue;
+  const displayedText = String(el.textContent || "");
+  el.dataset.resourceValue = nextText;
+  if (previousTarget == null || previousTarget === nextText || isHeadlessEnv()) {
+    el.textContent = nextText;
+    return true;
+  }
+
+  const currentMatch = displayedText.match(/^(.*?)(-?\d+(?:\.\d+)?)(.*)$/);
+  const nextMatch = nextText.match(/^(.*?)(-?\d+(?:\.\d+)?)(.*)$/);
+  if (!currentMatch || !nextMatch) {
+    el.textContent = nextText;
+    return true;
+  }
+  const previousValue = Number(currentMatch[2]);
+  const nextValue = Number(nextMatch[2]);
+  if (!Number.isFinite(previousValue) || !Number.isFinite(nextValue) || previousValue === nextValue) {
+    el.textContent = nextText;
+    return true;
+  }
+
+  const direction = nextValue > previousValue ? "up" : "down";
+  const animationDuration = getCombatAnimationDelay(520);
+  const staticFeedback = animationDuration === 0 && prefersReducedMotion();
+  const cancelPrevious = resourceFeedbackTimers.get(el);
+  if (cancelPrevious) cancelPrevious();
+  el.classList.remove("resource-change-up", "resource-change-down", "resource-change-static");
+  if (animationDuration === 0 && !staticFeedback) {
+    el.textContent = nextText;
+    return true;
+  }
+
+  void el.offsetWidth;
+  el.classList.add(staticFeedback ? "resource-change-static" : `resource-change-${direction}`);
+  if (staticFeedback) {
+    el.textContent = nextText;
+    const timer = setTimeout(() => {
+      el.classList.remove("resource-change-static");
+      resourceFeedbackTimers.delete(el);
+    }, 700);
+    resourceFeedbackTimers.set(el, () => clearTimeout(timer));
+    return true;
+  }
+
+  el.style.setProperty("--resource-feedback-duration", `${animationDuration}ms`);
+  let startedAt = null;
+  let frameHandle = null;
+  const useAnimationFrame = typeof requestAnimationFrame === "function";
+  const cancel = () => {
+    if (frameHandle == null) return;
+    if (useAnimationFrame && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(frameHandle);
+    } else {
+      clearTimeout(frameHandle);
+    }
+  };
+  const tick = timestamp => {
+    if (typeof document !== "undefined" && document.hidden) {
+      el.textContent = nextText;
+      el.classList.remove("resource-change-up", "resource-change-down");
+      resourceFeedbackTimers.delete(el);
+      return;
+    }
+    if (startedAt == null) startedAt = timestamp;
+    const progress = Math.min(1, (timestamp - startedAt) / animationDuration);
+    const eased = 1 - ((1 - progress) ** 3);
+    const value = Math.round(previousValue + ((nextValue - previousValue) * eased));
+    el.textContent = `${nextMatch[1]}${value}${nextMatch[3]}`;
+    if (progress < 1) {
+      frameHandle = useAnimationFrame
+        ? requestAnimationFrame(tick)
+        : setTimeout(() => tick(Date.now()), 16);
+      return;
+    }
+    el.textContent = nextText;
+    el.classList.remove("resource-change-up", "resource-change-down");
+    resourceFeedbackTimers.delete(el);
+  };
+  frameHandle = useAnimationFrame
+    ? requestAnimationFrame(tick)
+    : setTimeout(() => tick(Date.now()), 16);
+  resourceFeedbackTimers.set(el, cancel);
+  return true;
+}
+
+function emphasizeRewardElement(el, durationMs = 520) {
+  if (!el || isHeadlessEnv()) return false;
+  const reducedMotion = prefersReducedMotion();
+  const animationDuration = getCombatAnimationDelay(durationMs);
+  if (animationDuration === 0 && !reducedMotion) return false;
+  const previousTimer = rewardFeedbackTimers.get(el);
+  if (previousTimer) clearTimeout(previousTimer);
+  el.classList.remove("reward-enter", "reward-enter-static");
+  void el.offsetWidth;
+  el.classList.add(reducedMotion ? "reward-enter-static" : "reward-enter");
+  if (animationDuration > 0) {
+    el.style.setProperty("--reward-enter-duration", `${animationDuration}ms`);
+  }
+  rewardFeedbackTimers.set(el, setTimeout(() => {
+    el.classList.remove("reward-enter", "reward-enter-static");
+    rewardFeedbackTimers.delete(el);
+  }, reducedMotion ? 700 : animationDuration));
+  return true;
+}
+
+function markShopRewardHighlight(key) {
+  if (!isHeadlessEnv() && typeof key === "string" && key) pendingShopRewardHighlights.add(key);
+}
+
+function markRelicRewardHighlight(id) {
+  if (!isHeadlessEnv() && typeof id === "string" && id) pendingRelicRewardHighlights.add(id);
+}
+
+function showShopRewardSummary(message) {
+  const summary = getEl("shop-reward-summary");
+  if (!summary) return false;
+  setText(summary, message);
+  emphasizeRewardElement(summary, 620);
+  return true;
+}
+
+function initializeAmbientVisibilityHandling() {
+  if (
+    ambientVisibilityListenerInitialized ||
+    typeof document === "undefined" ||
+    typeof document.addEventListener !== "function"
+  ) return;
+  ambientVisibilityListenerInitialized = true;
+  const updateVisibility = () => {
+    if (document.body && document.body.classList) {
+      document.body.classList.toggle("page-hidden", Boolean(document.hidden));
+    }
+  };
+  document.addEventListener("visibilitychange", updateVisibility);
+  updateVisibility();
+}
+
+function showAttackerProjectionFeedback(creatureUid, damageDelta, totalDamage, attacking) {
+  if (isHeadlessEnv()) return false;
+  const creature = state.playerCreatures.find(item => item.uid === creatureUid);
+  const feedback = getEl("projection-feedback");
+  if (!creature || !feedback) return false;
+
+  if (projectionFeedbackTimer) clearTimeout(projectionFeedbackTimer);
+  if (projectionPulseTimer) clearTimeout(projectionPulseTimer);
+  [lastProjectionSource, lastProjectionTally].forEach(el => {
+    if (!el) return;
+    el.classList.remove("projection-feedback-pulse", "reduced-motion");
+  });
+
+  const source = queryEl(`#player-creatures [data-creature-uid="${creatureUid}"]`);
+  const tally = getEl("calc-total");
+  const change = damageDelta > 0
+    ? `increases by ${damageDelta}`
+    : (damageDelta < 0 ? `decreases by ${Math.abs(damageDelta)}` : "is unchanged");
+  feedback.textContent = `${creature.name} ${attacking ? "joins the attack" : "holds back"}: projected damage ${change} (${totalDamage} total).`;
+  feedback.hidden = false;
+  feedback.dataset.kind = "projection";
+
+  const reducedMotion = prefersReducedMotion();
+  [source, tally].forEach(el => {
+    if (!el) return;
+    el.classList.add("projection-feedback-pulse");
+    if (reducedMotion) el.classList.add("reduced-motion");
+  });
+  lastProjectionSource = source;
+  lastProjectionTally = tally;
+
+  projectionPulseTimer = setTimeout(() => {
+    [lastProjectionSource, lastProjectionTally].forEach(el => {
+      if (!el) return;
+      el.classList.remove("projection-feedback-pulse", "reduced-motion");
+    });
+    lastProjectionSource = null;
+    lastProjectionTally = null;
+    projectionPulseTimer = null;
+  }, 620);
+  projectionFeedbackTimer = setTimeout(() => {
+    feedback.hidden = true;
+    feedback.textContent = "";
+    projectionFeedbackTimer = null;
+  }, 2600);
+  return true;
 }
 
 function calculateCardTilt(rect, clientX, clientY, maxTilt = 14) {
@@ -351,7 +751,7 @@ function spawnExitGhost(el, rect, exitClass, durationMs = 440) {
   el.style.height = `${rect.height}px`;
   layer.appendChild(el);
 
-  const waitMs = prefersReducedMotion() ? 140 : durationMs;
+  const waitMs = getCombatAnimationDelay(durationMs);
   setTimeout(() => {
     if (el.parentNode) el.remove();
   }, waitMs);
@@ -577,7 +977,22 @@ const KEYWORD_GLOSSARY = {
   "Lifelink": "Heals your Planeswalker Life equal to the combat Power this creature deals.",
   "Flying": "Can only be blocked by enemy creatures that also have Flying.",
   "Connive": "Draws a card, discards your lowest-value card, and permanently buffs +1/+1 if a nonland was discarded.",
-  "Frozen": "Cannot block your attackers or retaliate at the end of this turn."
+  "Frozen": "Cannot block your attackers or retaliate at the end of this turn.",
+  "Freeze": "Taps an enemy creature and prevents it from blocking or retaliating this turn.",
+  "Anthem": "Provides passive Power and Toughness bonus (+X/+X) to your attacking creatures.",
+  "Dredge": "Allows returning fallen creatures or spells from the graveyard to hand.",
+  "Recur": "Retrieves cards from the graveyard back into your deck or hand.",
+  "Metalcraft": "Empowers abilities while you control 3 or more artifacts or relics.",
+  "Undergrowth": "Scales in combat Power or Resonance based on creatures in your graveyard.",
+  "Tribal": "Grants amplified bonuses when playing cards sharing the creature subtype.",
+  "Overdrive": "Multiplies combat Resonance when cast under high mana investment.",
+  "Ramp": "Puts additional Lands directly onto the battlefield to accelerate your mana pool.",
+  "Ritual": "Produces temporary burst mana for the current turn at low cost.",
+  "Tokens": "Creates 1/1 creature token copies on the battlefield that attack and trigger synergies.",
+  "Bounce": "Returns an enemy blocker to hand or clears it from the combat line.",
+  "Burn": "Deals direct combat damage to the Boss or enemy blockers.",
+  "Vigilance": "Attacks without tapping or incurring defensive vulnerability.",
+  "Ward": "Shields against hostile spells or effects unless an extra cost is paid."
 };
 
 function extractCardKeywords(cardOrCreature) {
@@ -616,6 +1031,15 @@ function getCardPlayabilityInfo(card) {
       playable: true,
       badge: "Cast Spell",
       reason: "Playable — Click to cast (auto-taps optimal untapped Lands).",
+      missingPips: []
+    };
+  }
+  const lifeCost = Math.max(0, Math.floor(Number(card.lifeCost) || 0));
+  if (lifeCost > 0 && state.playerLife <= lifeCost) {
+    return {
+      playable: false,
+      badge: `Need ${lifeCost + 1}+ Life`,
+      reason: `Unplayable: Need at least ${lifeCost + 1} Life to pay the ${lifeCost} Life cost.`,
       missingPips: []
     };
   }
@@ -742,13 +1166,20 @@ function renderCardArtHtml(c, mode = "hand") {
 function renderKeywordTagsHtml(permKws, tempKws = []) {
   const permHtml = (permKws || []).map(k => {
     const tip = KEYWORD_GLOSSARY[k] ? `${k}: ${KEYWORD_GLOSSARY[k]}` : k;
-    return `<span class="kw-tag" title="${tip}">${k}</span>`;
+    return `<span class="kw-tag" tabindex="0" role="note" aria-label="${tip}" title="${tip}">${k}</span>`;
   }).join("");
   const tempHtml = (tempKws || []).map(k => {
     const tip = KEYWORD_GLOSSARY[k] ? `${k} (This Turn): ${KEYWORD_GLOSSARY[k]}` : `${k} (Until end of turn)`;
-    return `<span class="kw-tag kw-temp" title="${tip}">${k}</span>`;
+    return `<span class="kw-tag kw-temp" tabindex="0" role="note" aria-label="${tip}" title="${tip}">${k}</span>`;
   }).join("");
   return permHtml + tempHtml;
+}
+
+function renderEvolutionMarkHtml(card) {
+  const evolution = getCardEvolutionDefinition(card?.evolutionId);
+  return evolution
+    ? `<span class="evolution-mark" title="${evolution.name}" aria-label="Evolved: ${evolution.name}">✦</span>`
+    : "";
 }
 
 function showCardHoverInspector(cardData, sourceEl, contextBadge = "") {
@@ -785,7 +1216,7 @@ function showCardHoverInspector(cardData, sourceEl, contextBadge = "") {
     <div class="inspector-card card-color-${cardData.color || "C"}${foilCls}">
       ${cardData.foil ? `<div class="foil-badge">✨ ${cardData.foil} Foil</div>` : ""}
       <div class="card-top-bar">
-        <span class="card-title">${cardData.name}</span>
+        <span class="card-title">${cardData.name}${renderEvolutionMarkHtml(cardData)}</span>
         ${cardData.manaCost ? renderManaCostHtml(cardData) : ""}
       </div>
       ${renderCardArtHtml(cardData, "inspector")}
@@ -815,18 +1246,20 @@ function hideCardHoverInspector() {
 }
 
 function triggerTransientClass(el, cls, durationMs = 320) {
-  if (!el || isHeadlessEnv() || prefersReducedMotion()) return;
+  if (!el || isHeadlessEnv()) return;
+  const animationDuration = getCombatAnimationDelay(durationMs);
+  if (animationDuration <= 0) return;
   el.classList.remove(cls);
   void el.offsetWidth;
   el.classList.add(cls);
   setTimeout(() => {
     el.classList.remove(cls);
-  }, durationMs);
+  }, animationDuration);
 }
 
 function ensureFxLayerTop() {
   if (isHeadlessEnv()) return null;
-  const layer = document.getElementById("fx-layer");
+  const layer = getEl("fx-layer");
   if (!layer) return null;
   if (typeof layer.showPopover === "function") {
     try {
@@ -865,7 +1298,7 @@ function spawnFloatingNumber(targetElOrRect, text, variant = "dmg-boss", magnitu
   el.style.top = `${cy.toFixed(1)}px`;
   layer.appendChild(el);
 
-  const waitMs = prefersReducedMotion() ? 450 : 940;
+  const waitMs = getCombatAnimationDelay(940);
   setTimeout(() => {
     if (el.parentNode) el.remove();
   }, waitMs);
@@ -899,7 +1332,68 @@ function findTriggerSourceElement(label) {
     const el = document.querySelector(`#player-lands [data-land-uid="${lastLand.uid}"]`);
     if (el) return el;
   }
+  if (clean.includes("nyxbloom mana surge")) {
+    const surgeRelic = getRelicDefs().find(def => def.manaSurge);
+    if (surgeRelic) {
+      const el = document.querySelector(`#relic-slots [data-relic-id="${surgeRelic.id}"]`);
+      if (el) return el;
+    }
+  }
   return null;
+}
+
+function highlightCombatContributors(combat) {
+  if (isHeadlessEnv() || !combat) return;
+  const elements = new Set();
+  const addElement = el => {
+    if (el && elements.size < 8) elements.add(el);
+  };
+  const activeSynergies = getSynergyStates().filter(syn => syn.power > 0 || syn.mult > 0);
+  activeSynergies.forEach(syn => {
+    addElement(queryEl(`#synergy-box [data-synergy-id="${syn.id}"]`));
+  });
+
+  Object.keys(combat.attackerDamageByUid || {}).forEach(uid => {
+    addElement(queryEl(`#player-creatures [data-creature-uid="${uid}"]`));
+  });
+  const breakdown = [...(combat.powerBreakdown || []), ...(combat.resonanceBreakdown || [])];
+  breakdown.forEach(item => {
+    addElement(findTriggerSourceElement(item.label));
+  });
+  [...(state.resonanceSources || []), ...(state.burnSources || [])].forEach(source => {
+    addElement(findTriggerSourceElement(source.label));
+  });
+
+  activeSynergies.forEach(syn => {
+    const contributors = state.playerCreatures.filter(creature => {
+      if (syn.id === "goblin") return creature.subtype === "Goblin";
+      if (syn.id === "swarm") return true;
+      if (syn.id === "titans") return creature.power + (creature.tempPower || 0) >= 5;
+      if (syn.id === "skies") return getCreatureKeywords(creature).includes("Flying");
+      if (syn.id === "rainbow") {
+        return String(creature.color || "").split("").some(color => "GRBUW".includes(color));
+      }
+      return false;
+    });
+    contributors.slice(0, 3).forEach(creature => {
+      addElement(queryEl(`#player-creatures [data-creature-uid="${creature.uid}"]`));
+    });
+
+    if (syn.id === "landfall" && state.playerLands.length > 0) {
+      addElement(findTriggerSourceElement("landfall"));
+    } else if (syn.id === "rainbow") {
+      const lastLand = state.playerLands[state.playerLands.length - 1];
+      if (lastLand) addElement(queryEl(`#player-lands [data-land-uid="${lastLand.uid}"]`));
+    } else if (syn.id === "grave") {
+      addElement(getEl("btn-view-graveyard"));
+    }
+
+    getRelicDefs().filter(def => (def.boosts && def.boosts[syn.id] > 1)).forEach(def => {
+      addElement(findTriggerSourceElement(def.name));
+    });
+  });
+
+  elements.forEach(el => triggerTransientClass(el, "source-trigger-pulse", 560));
 }
 
 function flushTriggerNotifications() {
@@ -970,14 +1464,38 @@ let prevEnemyEncounterIdx = -1;
 let prevEnemyLifePct = 100;
 let ghostBarTimer = null;
 let lastPreCombatSnapshot = null;
+let bossLifeImpactTimer = null;
+
+function showBossLifeImpact(lifeBar, lethal) {
+  if (!lifeBar || isHeadlessEnv()) return;
+  if (bossLifeImpactTimer) clearTimeout(bossLifeImpactTimer);
+
+  const impactClass = lethal ? "boss-life-lethal" : "boss-life-impact";
+  const duration = getCombatAnimationDelay(lethal ? 620 : 420);
+  lifeBar.classList.remove("boss-life-impact", "boss-life-lethal", "reduced-motion");
+  if (lifeBar.style?.removeProperty) lifeBar.style.removeProperty("--boss-life-impact-duration");
+  void lifeBar.offsetWidth;
+  lifeBar.classList.add(impactClass);
+  if (duration === 0) lifeBar.classList.add("reduced-motion");
+  if (duration > 0 && lifeBar.style?.setProperty) {
+    lifeBar.style.setProperty("--boss-life-impact-duration", `${duration}ms`);
+  }
+
+  bossLifeImpactTimer = setTimeout(() => {
+    lifeBar.classList.remove(impactClass, "reduced-motion");
+    if (lifeBar.style?.removeProperty) lifeBar.style.removeProperty("--boss-life-impact-duration");
+    bossLifeImpactTimer = null;
+  }, duration || 220);
+}
 
 function runCombatResolutionChoreography(power, mult, totalDamage) {
   if (isHeadlessEnv()) return;
   const snap = lastPreCombatSnapshot;
-  const bossWrap = document.querySelector("#boss-panel .life-bar-wrap") || document.getElementById("boss-panel");
+  const bossWrap = queryEl("#boss-panel .life-bar-wrap") || getEl("boss-panel");
   const bossRect = bossWrap ? bossWrap.getBoundingClientRect() : null;
+  const attackerOrder = new Map();
 
-  // 1. Lunge attacking creatures toward their assigned blocker or Boss bar, and shake hit blockers
+  // 1. Stagger attacker lunges and matching blocker reactions into a readable hit sequence.
   const firstBlockerByAttacker = {};
   if (snap && snap.combat && snap.combat.blockerAssignments) {
     Object.entries(snap.combat.blockerAssignments).forEach(([bUid, bInfo]) => {
@@ -988,26 +1506,36 @@ function runCombatResolutionChoreography(power, mult, totalDamage) {
   }
 
   if (snap && snap.attackerRects) {
+    let attackerIndex = 0;
+    const lungeDuration = getCombatAnimationDelay(340);
     snap.attackerRects.forEach((attRect, uid) => {
-      const liveEl = document.querySelector(`#player-creatures [data-creature-uid="${uid}"]`);
+      attackerOrder.set(uid, attackerIndex);
+      const staggerDelay = getCombatAnimationDelay(Math.min(attackerIndex * 65, 260));
+      attackerIndex++;
       const targetBlockerUid = firstBlockerByAttacker[uid];
       let targetRect = bossRect;
       if (targetBlockerUid && snap.blockerRects.has(targetBlockerUid)) {
         targetRect = snap.blockerRects.get(targetBlockerUid);
       }
-      if (liveEl && targetRect && !prefersReducedMotion() && typeof liveEl.animate === "function") {
-        const dx = ((targetRect.left + targetRect.width / 2) - (attRect.left + attRect.width / 2)) * 0.42;
-        const dy = Math.min(-24, ((targetRect.top + targetRect.height / 2) - (attRect.top + attRect.height / 2)) * 0.45);
-        try {
-          liveEl.animate(
-            [
-              { transform: "translate(0px, 0px) scale(1)" },
-              { transform: `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px) scale(1.09)`, offset: 0.42 },
-              { transform: "translate(0px, 0px) scale(1)" }
-            ],
-            { duration: 340, easing: "cubic-bezier(0.18, 1.35, 0.36, 1)" }
-          );
-        } catch (_) {}
+      if (lungeDuration > 0 && targetRect) {
+        const launch = () => {
+          const liveEl = queryEl(`#player-creatures [data-creature-uid="${uid}"]`);
+          if (!liveEl || typeof liveEl.animate !== "function") return;
+          const dx = ((targetRect.left + targetRect.width / 2) - (attRect.left + attRect.width / 2)) * 0.42;
+          const dy = Math.min(-24, ((targetRect.top + targetRect.height / 2) - (attRect.top + attRect.height / 2)) * 0.45);
+          try {
+            liveEl.animate(
+              [
+                { transform: "translate(0px, 0px) scale(1)" },
+                { transform: `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px) scale(1.09)`, offset: 0.42 },
+                { transform: "translate(0px, 0px) scale(1)" }
+              ],
+              { duration: lungeDuration, easing: "cubic-bezier(0.18, 1.35, 0.36, 1)" }
+            );
+          } catch (_) {}
+        };
+        if (staggerDelay > 0) setTimeout(launch, staggerDelay);
+        else launch();
       }
     });
   }
@@ -1015,16 +1543,20 @@ function runCombatResolutionChoreography(power, mult, totalDamage) {
   if (snap && snap.combat && snap.combat.blockerAssignments && snap.blockerRects) {
     Object.entries(snap.combat.blockerAssignments).forEach(([bUid, bInfo]) => {
       const bRect = snap.blockerRects.get(bUid);
-      const liveBlocker = document.querySelector(`#enemy-creatures [data-enemy-uid="${bUid}"]`);
-      if (liveBlocker) {
-        triggerTransientClass(liveBlocker, "card-hit-shake", 380);
-      }
       const dmgVal = bInfo ? (bInfo.dmgTaken || bInfo.damageTaken || 0) : 0;
-      if (bRect && dmgVal > 0) {
-        spawnFloatingNumber(bRect, `-${dmgVal}`, "dmg-blocker", dmgVal);
-      }
+      const attackerIndex = attackerOrder.get(bInfo?.attackerUid) || 0;
+      const staggerDelay = getCombatAnimationDelay(Math.min(attackerIndex * 65, 260));
+      const showBlockerHit = () => {
+        const liveBlocker = queryEl(`#enemy-creatures [data-enemy-uid="${bUid}"]`);
+        if (liveBlocker) triggerTransientClass(liveBlocker, "card-hit-shake", 380);
+        if (bRect && dmgVal > 0) spawnFloatingNumber(bRect, `-${dmgVal}`, "dmg-blocker", dmgVal);
+      };
+      if (staggerDelay > 0) setTimeout(showBlockerHit, staggerDelay);
+      else showBlockerHit();
     });
   }
+
+  highlightCombatContributors(snap?.combat);
 
   // 2. Balatro-style Score Tally: Power counts up -> Mult slams -> Total slams + Boss damage popup + Screen Shake
   const pwrEl = document.getElementById("calc-power");
@@ -1034,46 +1566,46 @@ function runCombatResolutionChoreography(power, mult, totalDamage) {
   const multPill = document.querySelector(".mult-pill");
   const totPill = document.querySelector(".total-pill");
 
-  if (!prefersReducedMotion() && pwrEl && multEl && totEl) {
+  const tallyDuration = getCombatAnimationDelay(260);
+  if (tallyDuration > 0 && pwrEl && multEl && totEl) {
     triggerTransientClass(pwrPill, "tally-pill-pop", 280);
     const steps = 6;
     for (let i = 1; i <= steps; i++) {
       setTimeout(() => {
         if (pwrEl) pwrEl.textContent = Math.round((power * i) / steps);
-      }, i * 24);
+      }, getCombatAnimationDelay(i * 24));
     }
     setTimeout(() => {
       if (multEl) multEl.textContent = mult;
       triggerTransientClass(multPill, "tally-mult-slam", 360);
-    }, 145);
+    }, getCombatAnimationDelay(145));
     setTimeout(() => {
       if (totEl) totEl.textContent = `${totalDamage} DMG`;
       triggerTransientClass(totPill, "tally-total-slam", 440);
-    }, 260);
+    }, tallyDuration);
   } else {
-    triggerTransientClass(totPill, "tally-total-slam", 300);
+    if (pwrEl) pwrEl.textContent = power;
+    if (multEl) multEl.textContent = mult;
+    if (totEl) totEl.textContent = `${totalDamage} DMG`;
   }
 
-  if (totalDamage > 0 && bossRect) {
-    spawnFloatingNumber(bossRect, `-${totalDamage} DMG`, "dmg-boss", totalDamage, false);
-  }
+  const attackerCount = snap?.attackerRects?.size || 0;
+  const impactDelay = getCombatAnimationDelay(Math.min(Math.max(0, attackerCount - 1) * 65, 260) + 120);
+  const lethal = Boolean(snap && snap.enemyLife > 0 && totalDamage >= snap.enemyLife);
+  if (totalDamage > 0) {
+    const showBossHit = () => {
+      if (bossWrap) showBossLifeImpact(bossWrap, lethal);
+      if (bossRect) spawnFloatingNumber(bossRect, `-${totalDamage} DMG`, "dmg-boss", totalDamage, false);
 
-  if (totalDamage > 0 && !prefersReducedMotion()) {
-    const mainEl = document.querySelector(".battlefield-main");
-    const shakeCls = totalDamage >= 40 ? "screen-shake-lg" : (totalDamage >= 15 ? "screen-shake-md" : "screen-shake-sm");
-    triggerTransientClass(mainEl, shakeCls, 440);
-
-    if (totalDamage >= 12) {
-      const layer = ensureFxLayerTop() || document.getElementById("fx-layer");
-      if (layer) {
-        const flash = document.createElement("div");
-        flash.className = "fx-impact-flash";
-        layer.appendChild(flash);
-        setTimeout(() => {
-          if (flash.parentNode) flash.remove();
-        }, 380);
+      const shakeDelay = getCombatAnimationDelay(1);
+      if (shakeDelay > 0) {
+        const mainEl = queryEl(".battlefield-main");
+        const shakeCls = totalDamage >= 40 ? "screen-shake-lg" : (totalDamage >= 15 ? "screen-shake-md" : "screen-shake-sm");
+        triggerTransientClass(mainEl, shakeCls, 440);
       }
-    }
+    };
+    if (impactDelay > 0) setTimeout(showBossHit, impactDelay);
+    else showBossHit();
   }
 }
 
@@ -1102,18 +1634,56 @@ let pendingRenderSections = new Set();
 let scheduledRenderToken = null;
 
 function renderBossPanel(enc, lifePct) {
+  const ambient = Number(enc.plane) >= 2
+    ? { tint: "#f39b78", glow: "rgba(243, 125, 89, 0.16)" }
+    : { tint: "#65c8c0", glow: "rgba(74, 184, 176, 0.16)" };
+  [getEl("boss-panel"), queryEl(".battlefield-main"), getEl("relic-slots")].forEach(el => {
+    if (!el || !el.style || typeof el.style.setProperty !== "function") return;
+    el.style.setProperty("--encounter-tint", ambient.tint);
+    el.style.setProperty("--encounter-glow", ambient.glow);
+  });
   setText("plane-badge", `PLANE ${enc.plane} • ${enc.tier}`);
   setText("boss-name", enc.name);
   setText("boss-rule", enc.rule);
+  const challenge = typeof getRunChallengeById === "function"
+    ? getRunChallengeById(state.challengeId)
+    : null;
+  const challengeBadge = getEl("run-challenge-badge");
+  if (challengeBadge && challenge) {
+    challengeBadge.hidden = challenge.id === "standard";
+    challengeBadge.textContent = `CHALLENGE • ${challenge.name.toUpperCase()}: ${challenge.description}`;
+    challengeBadge.title = challenge.description;
+  }
+  const campaign = typeof getActiveCampaign === "function" ? getActiveCampaign() : null;
+  const campaignBadge = getEl("run-campaign-badge");
+  if (campaignBadge && campaign) {
+    campaignBadge.hidden = false;
+    campaignBadge.textContent = `CAMPAIGN • ${campaign.name.toUpperCase()}`;
+    campaignBadge.title = campaign.description;
+  }
+  const seedBadge = getEl("run-seed-badge");
+  if (seedBadge) {
+    seedBadge.hidden = !state.runSeed;
+    seedBadge.textContent = state.runSeed ? `SEEDED RUN • ${state.runSeed}` : "";
+    seedBadge.title = state.runSeed ? `Share this seed to replay the same run: ${state.runSeed}` : "";
+  }
 
   const enemyLifeBar = getEl("enemy-life-bar");
   if (enemyLifeBar && enemyLifeBar.style) {
+    const fillDuration = getCombatAnimationDelay(350);
+    enemyLifeBar.style.transition = fillDuration > 0
+      ? `width ${fillDuration}ms var(--ease-out)`
+      : "none";
     enemyLifeBar.style.width = `${lifePct}%`;
   }
-  setText("enemy-life-text", `${state.enemyLife} / ${state.enemyMaxLife}`);
+  setResourceText("enemy-life-text", `${state.enemyLife} / ${state.enemyMaxLife}`);
 
   const ghostBarEl = getEl("enemy-life-ghost");
   if (ghostBarEl && ghostBarEl.style) {
+    const trailDuration = getCombatAnimationDelay(580);
+    ghostBarEl.style.transition = trailDuration > 0
+      ? `width ${trailDuration}ms var(--ease-out)`
+      : "none";
     if (state.encounterIdx !== prevEnemyEncounterIdx || lifePct >= prevEnemyLifePct) {
       if (ghostBarTimer) {
         clearTimeout(ghostBarTimer);
@@ -1122,28 +1692,42 @@ function renderBossPanel(enc, lifePct) {
       ghostBarEl.style.transition = "none";
       ghostBarEl.style.width = `${lifePct}%`;
       void ghostBarEl.offsetWidth;
-      ghostBarEl.style.transition = "";
+      ghostBarEl.style.transition = trailDuration > 0
+        ? `width ${trailDuration}ms var(--ease-out)`
+        : "none";
     } else {
       if (ghostBarTimer) clearTimeout(ghostBarTimer);
-      ghostBarTimer = setTimeout(() => {
-        if (ghostBarEl.style) ghostBarEl.style.width = `${lifePct}%`;
+      const trailDelay = getCombatAnimationDelay(220);
+      if (trailDelay === 0) {
         ghostBarTimer = null;
-      }, prefersReducedMotion() ? 40 : 220);
+        ghostBarEl.style.width = `${lifePct}%`;
+      } else {
+        ghostBarTimer = setTimeout(() => {
+          if (ghostBarEl.style) ghostBarEl.style.width = `${lifePct}%`;
+          ghostBarTimer = null;
+        }, trailDelay);
+      }
     }
   }
   prevEnemyEncounterIdx = state.encounterIdx;
   prevEnemyLifePct = lifePct;
 
-  const encPos = state.encounterIdx % ENCOUNTERS.length;
-  const loop = Math.floor(state.encounterIdx / ENCOUNTERS.length);
+  const encounters = typeof getActiveCampaignEncounters === "function"
+    ? getActiveCampaignEncounters()
+    : ENCOUNTERS;
+  const routeNodes = typeof getActiveCampaignRouteNodes === "function"
+    ? getActiveCampaignRouteNodes()
+    : CAMPAIGN_ROUTE_NODES;
+  const encPos = state.encounterIdx % encounters.length;
+  const loop = Math.floor(state.encounterIdx / encounters.length);
   const currentNode = typeof getCurrentRouteNode === "function" ? getCurrentRouteNode() : null;
-  const totalRouteSteps = typeof CAMPAIGN_ROUTE_NODES !== "undefined" && Array.isArray(CAMPAIGN_ROUTE_NODES)
-    ? Math.max(...CAMPAIGN_ROUTE_NODES.map(n => n.step)) + 1
-    : ENCOUNTERS.length;
+  const totalRouteSteps = Array.isArray(routeNodes)
+    ? Math.max(...routeNodes.map(n => n.step)) + 1
+    : encounters.length;
   const curStep = currentNode && typeof currentNode.step === "number" ? currentNode.step + 1 : encPos + 1;
   setText("route-step-badge", `${curStep}/${totalRouteSteps}`);
 
-  const ladderHtml = ENCOUNTERS.map((e, i) =>
+  const ladderHtml = encounters.map((e, i) =>
     `<span class="ladder-node ${i < encPos ? "done" : ""} ${i === encPos ? "current" : ""}" title="${e.name} (Click to inspect Planar Route)">${i < encPos ? "✓" : i + 1}</span>`
   ).join('<span class="ladder-link"></span>') + (loop > 0 ? `<small class="ladder-loop">Loop ${loop + 1}</small>` : "");
   patchInnerHtmlIfChanged(getEl("encounter-ladder"), ladderHtml);
@@ -1188,7 +1772,7 @@ function renderCombatMathAndSynergies(enc, combat, lifePct) {
       const tip = x.tiers.map(([n, b]) => `${n}+ ${x.unit}: ${bonusTxt({ mult: b.mult, power: b.power }) || "—"}`).join("\n")
         + (x.boost > 1 ? `\n(×${x.boost} relic boost)` : "");
       const pips = x.tiers.map((t, i) => `<i class="syn-pip ${i <= x.tier ? "on" : ""}"></i>`).join("");
-      return `<div class="syn-row ${x.tier >= 0 ? "active" : ""}" title="${tip}">
+      return `<div class="syn-row ${x.tier >= 0 ? "active" : ""}" data-synergy-id="${x.id}" title="${tip}">
         <span class="syn-name">${x.icon} ${x.name}</span>
         <span class="syn-count">${x.count}${x.next ? "/" + x.next : ""}</span>
         <span class="syn-bonus">${bonusTxt(x) || "—"}</span>
@@ -1211,11 +1795,20 @@ function renderCombatMathAndSynergies(enc, combat, lifePct) {
   const survivors = state.enemyCreatures.filter(b => !combat.deadBlockerUids.has(b.uid) && !b.frozen);
   const threat = survivors.reduce((s, b) => s + b.power + (enc.staxHideBonus || 0), 0) + (enc.staxDrain || 0);
   const threatEl = getEl("calc-threat");
-  const spawnN = enc.spawn.count || 1;
   if (threatEl) {
     threatEl.textContent = `-${threat} HP`;
     if (threatEl.classList) threatEl.classList.toggle("danger", threat >= state.playerLife);
-    threatEl.title = `Next wave: ${spawnN}× ${enc.spawn.name} (${enc.spawn.power}/${enc.spawn.toughness + (enc.cenobiteAura || 0)})`;
+    const combatEndsEncounter = state.enemyLife > 0 && combat.totalDamage >= state.enemyLife;
+    const nextWaveCount = !combatEndsEncounter && state.turn < state.maxTurns
+      ? getEnemyWaveSpawnCount(
+        enc,
+        state.turn + 1,
+        state.enemyCreatures.filter(b => !combat.deadBlockerUids.has(b.uid)).length
+      )
+      : 0;
+    threatEl.title = nextWaveCount > 0
+      ? `Next turn: ${nextWaveCount}× ${enc.spawn.name} (${enc.spawn.power}/${enc.spawn.toughness + (enc.cenobiteAura || 0)})`
+      : "No additional enemy wave next turn";
   }
 
   const playerLifeEl = getEl("player-life");
@@ -1251,9 +1844,9 @@ function renderCombatMathAndSynergies(enc, combat, lifePct) {
 }
 
 function renderPlayerStatsAndMana() {
-  setText("player-life", `${state.playerLife} / ${MAX_LIFE}`);
+  setResourceText("player-life", `${state.playerLife} / ${MAX_LIFE}`);
   setText("turn-counter", `${state.turn} / ${state.maxTurns}`);
-  setText("player-gold", `$${state.gold}`);
+  setResourceText("player-gold", `$${state.gold}`);
   setText("land-drop-status", `Lands: ${state.landsPlayedThisTurn}/${state.maxLandsPerTurn}`);
 
   const manaContainer = getEl("mana-pool-display");
@@ -1329,6 +1922,9 @@ function renderCommandZone() {
       const sellVal = Math.floor((r.cost || 4) / 2);
       if (!el.classList.contains("relic-card")) el.className = "relic-card";
       el.dataset.relicId = r.id;
+      if (pendingRelicRewardHighlights.delete(r.id)) {
+        emphasizeRewardElement(el);
+      }
       patchInnerHtmlIfChanged(el, `
         <div class="relic-header-row">
           <div class="relic-name">✦ ${r.name}</div>
@@ -1432,8 +2028,7 @@ function renderBattlefieldLanes(enc, combat, prevHandRects, libRect) {
           <span class="card-title">${ec.name}</span>
         </div>
         <div class="card-keywords">
-          ${ec.keywords.map(k => `<span class="kw-tag">${k}</span>`).join("")}
-          ${ec.frozen ? `<span class="kw-tag kw-temp">Frozen</span>` : ""}
+          ${renderKeywordTagsHtml(ec.keywords, ec.frozen ? ["Frozen"] : [])}
         </div>
         <div class="card-rules">${blockSummary}</div>
         <div class="card-bottom-bar">
@@ -1465,6 +2060,7 @@ function renderBattlefieldLanes(enc, combat, prevHandRects, libRect) {
       const tough = pc.toughness + (pc.tempToughness || 0);
       const deadCount = combat.deadAttackerCountsByUid[pc.uid] || 0;
       const attAssign = combat.attackerAssignments[pc.uid];
+      const damageToBoss = combat.attackerDamageByUid[pc.uid] || 0;
       const count = pc.count || 1;
       const stateClass = pc.summoningSick ? "summoning-sick" : (pc.attacking ? "attacking" : "");
       const casualtyClass = deadCount > 0 ? "will-die" : "";
@@ -1493,16 +2089,24 @@ function renderBattlefieldLanes(enc, combat, prevHandRects, libRect) {
       el.dataset.creatureUid = pc.uid;
       el.setAttribute("aria-pressed", !pc.summoningSick && pc.attacking ? "true" : "false");
       el.setAttribute("aria-disabled", pc.summoningSick ? "true" : "false");
+      const projectionDescription = pc.summoningSick
+        ? "Cannot attack this turn because of summoning sickness."
+        : (pc.attacking
+          ? (damageToBoss > 0
+            ? `Attacking and contributing ${damageToBoss} unblocked power to ${combat.totalDamage} projected damage.`
+            : `Attacking but blocked; contributes no direct Boss damage to ${combat.totalDamage} projected damage.`)
+          : `Holding back; current projected damage is ${combat.totalDamage}.`);
+      el.title = projectionDescription;
+      el.setAttribute("aria-label", `${pc.name}, ${pow}/${tough}. ${projectionDescription} Activate to toggle attacking.`);
 
       patchInnerHtmlIfChanged(el, `
         ${pc.foil ? `<div class="foil-badge">✨ ${pc.foil}</div>` : ""}
         <div class="card-top-bar">
-          <span class="card-title">${pc.name}</span>
+          <span class="card-title">${pc.name}${renderEvolutionMarkHtml(pc)}</span>
           ${count > 1 ? `<span class="stack-count-badge">×${count}</span>` : ""}
         </div>
         <div class="card-keywords">
-          ${permKws.map(k => `<span class="kw-tag">${k}</span>`).join("")}
-          ${tempKws.map(k => `<span class="kw-tag kw-temp" title="Until end of turn">${k}</span>`).join("")}
+          ${renderKeywordTagsHtml(permKws, tempKws)}
         </div>
         <div class="card-rules">${pc.rules}</div>
         <div class="card-bottom-bar">
@@ -1591,6 +2195,7 @@ function renderBattlefieldLanes(enc, combat, prevHandRects, libRect) {
     });
     lastPreCombatSnapshot = {
       combat,
+      enemyLife: state.enemyLife,
       attackerRects,
       blockerRects
     };
@@ -1644,12 +2249,12 @@ function renderHandZone(prevHandRects, libRect, boardUidSet) {
         ${c.foil ? `<div class="foil-badge">✨ ${c.foil}</div>` : ""}
         <div>
           <div class="card-top-bar">
-            <span class="card-title">${c.name}</span>
+            <span class="card-title">${c.name}${renderEvolutionMarkHtml(c)}</span>
             ${renderManaCostHtml(c)}
           </div>
           <div class="card-type-line">${c.type}${c.subtype ? ` — ${c.subtype}` : ""}</div>
           <div class="card-keywords">
-            ${(c.keywords || []).map(k => `<span class="kw-tag">${k}</span>`).join("")}
+            ${renderKeywordTagsHtml(c.keywords || [])}
           </div>
         </div>
         <div class="card-rules">${c.rules}</div>
@@ -1791,7 +2396,12 @@ function renderAll() {
 function renderShop() {
   if (isHeadlessEnv()) return;
 
-  setText("shop-gold", `$${state.gold}`);
+  setResourceText("shop-gold", `$${state.gold}`);
+  const rewardDuration = getCombatAnimationDelay(460);
+  const rewardClass = key => pendingShopRewardHighlights.has(key) && rewardDuration > 0 ? " reward-enter" : "";
+  const rewardStyle = key => pendingShopRewardHighlights.has(key) && rewardDuration > 0
+    ? ` style="--reward-enter-duration:${rewardDuration}ms"`
+    : "";
   const rerollBtn = getEl("btn-reroll-shop");
   if (rerollBtn) {
     rerollBtn.disabled = state.gold < 2;
@@ -1800,7 +2410,7 @@ function renderShop() {
   const relicBox = getEl("shop-relics");
   if (relicBox) {
     relicBox.innerHTML = state.shopStock.relics.map((r, i) => `
-      <div class="shop-item-card">
+      <div class="shop-item-card${rewardClass(`relic_${r.id}`)}"${rewardStyle(`relic_${r.id}`)}>
         <div class="shop-item-top">
           <span class="shop-item-name">✨ ${r.name}</span>
           <button type="button" class="btn-buy" data-buy-relic="${i}"
@@ -1818,7 +2428,7 @@ function renderShop() {
     cardsBox.innerHTML = state.shopStock.cards.map((item, i) => {
       const c = item.card;
       return `
-        <div class="shop-item-card">
+        <div class="shop-item-card${rewardClass(`card_${c.id}`)}"${rewardStyle(`card_${c.id}`)}>
           <div class="shop-item-top">
             <span class="shop-item-name">${c.name} ${renderManaCostHtml(c)}</span>
             <button type="button" class="btn-buy" data-buy-card="${i}"
@@ -1835,26 +2445,39 @@ function renderShop() {
   const upgBox = getEl("shop-upgrades");
   if (upgBox) {
     const thinCheck = canSafelyThinBasics();
+    const purgeCheck = typeof canSafelyPurgeCard === "function" ? canSafelyPurgeCard() : { allowed: true };
     upgBox.innerHTML = state.shopStock.upgrades.map((u, i) => {
       const scrollFull = u.isConsumable && state.consumables.length >= 2;
       const healFull = u.id === "sanctum_heal" && state.playerLife >= MAX_LIFE;
       const thinBlocked = u.id === "exile_thin" && !thinCheck.allowed;
-      const disabled = u.bought || state.gold < u.cost || scrollFull || healFull || thinBlocked;
+      const purgeBlocked = u.id === "card_purge" && !purgeCheck.allowed;
+      const noEvolutionTarget = u.id === "card_evolution" && getAvailableEvolutionTargets().length === 0;
+      const disabled = u.bought || state.gold < u.cost || scrollFull || healFull || thinBlocked || purgeBlocked || noEvolutionTarget;
 
       let btnText = `$${u.cost}`;
       if (u.bought) btnText = "APPLIED";
       else if (scrollFull) btnText = "FULL";
       else if (healFull) btnText = "MAX HP";
       else if (thinBlocked) btnText = "GUARDED";
+      else if (purgeBlocked) btnText = "MIN 30";
+      else if (noEvolutionTarget) btnText = "NO TARGET";
 
       const descText = u.id === "exile_thin"
         ? `${u.desc} (${thinCheck.reason})`
-        : u.desc;
+        : (u.id === "card_purge" ? `${u.desc} (${purgeCheck.reason})` : u.desc);
+
+      const upgIcon = u.isConsumable
+        ? "📜"
+        : (u.id === "sanctum_heal"
+          ? "💚"
+          : (u.id === "card_evolution"
+            ? "✨"
+            : (u.id === "card_purge" ? "🔥" : "🔨")));
 
       return `
-        <div class="shop-item-card">
+        <div class="shop-item-card${rewardClass(`upgrade_${u.id}`)}"${rewardStyle(`upgrade_${u.id}`)}>
           <div class="shop-item-top">
-            <span class="shop-item-name">${u.isConsumable ? "📜" : (u.id === "sanctum_heal" ? "💚" : "🔨")} ${u.name}</span>
+            <span class="shop-item-name">${upgIcon} ${u.name}</span>
             <button type="button" class="btn-buy" data-buy-upg="${i}"
               ${disabled ? "disabled" : ""}>
               ${btnText}
@@ -1865,6 +2488,167 @@ function renderShop() {
       `;
     }).join("");
   }
+  pendingShopRewardHighlights.clear();
+}
+
+function openCardEvolutionPicker(upgradeIdx) {
+  const candidates = getAvailableEvolutionTargets();
+  if (candidates.length === 0) return false;
+
+  openTargetPickerModal(
+    "Choose a Creature to Evolve",
+    "This permanent upgrade can be applied to each Creature only once. Press Escape to cancel.",
+    candidates,
+    (card, idx) => {
+      const power = card.power + (card.permPowerBonus || 0);
+      const toughness = card.toughness + (card.permToughnessBonus || 0);
+      return `
+        <button type="button" class="evolution-option-card card-color-${card.color}" data-target-idx="${idx}">
+          <span class="card-title">${card.name}</span>
+          <span class="card-type-line">${card.subtype || "Creature"} • ${power}/${toughness}</span>
+          <span class="card-keywords">${renderKeywordTagsHtml(card.keywords || [])}</span>
+        </button>
+      `;
+    },
+    card => {
+      const options = getAvailableCardEvolutionOptions(card);
+      openTargetPickerModal(
+        `Evolve ${card.name}`,
+        "Choose +3/+3 or +1/+1 with Trample. Press Escape to cancel.",
+        options,
+        (option, idx) => `
+          <button type="button" class="evolution-option-card" data-target-idx="${idx}">
+            <span class="card-title">${option.name}</span>
+            <span class="card-type-line">${option.desc}</span>
+          </button>
+        `,
+        option => completeCardEvolutionPurchase(upgradeIdx, card.uid, option.id),
+        { allowCancel: true }
+      );
+    },
+    { allowCancel: true }
+  );
+  return true;
+}
+
+function openCardPurgePicker(upgradeIdx) {
+  const candidates = typeof getAvailablePurgeTargets === "function" ? getAvailablePurgeTargets() : [];
+  if (candidates.length === 0) return false;
+
+  openTargetPickerModal(
+    "Choose a Card to Permanently Purge",
+    "Permanently exile this card from your deck for the rest of the campaign (minimum 30 cards). Press Escape to cancel.",
+    candidates,
+    (card, idx) => {
+      const isCreature = card.type === "Creature" || card.power !== undefined;
+      const pow = isCreature ? (card.power + (card.permPowerBonus || 0)) : 0;
+      const tough = isCreature ? (card.toughness + (card.permToughnessBonus || 0)) : 0;
+      const ptText = isCreature ? ` • ${pow}/${tough}` : "";
+      const costText = card.manaCost ? ` [${card.manaCost}]` : "";
+      return `
+        <button type="button" class="evolution-option-card card-color-${card.color || 'C'}" data-target-idx="${idx}">
+          <span class="card-title">${card.name}${costText}</span>
+          <span class="card-type-line">${card.type || "Card"}${card.subtype ? ` — ${card.subtype}` : ""}${ptText}</span>
+          <span class="card-keywords">${renderKeywordTagsHtml(card.keywords || [])}</span>
+        </button>
+      `;
+    },
+    card => completeCardPurgePurchase(upgradeIdx, card.uid),
+    { allowCancel: true }
+  );
+  return true;
+}
+
+const MAX_COMBAT_LOG_ENTRIES = 100;
+const COMBAT_LOG_EVENT_LABELS = {
+  encounter: "Encounter",
+  turn: "Turn",
+  play: "Card played",
+  trigger: "Trigger",
+  combat: "Combat",
+  blocker: "Blocker",
+  damage: "Damage",
+  result: "Result"
+};
+let combatLogEntries = [];
+let combatLogSequence = 0;
+let combatLogEncounterKey = null;
+
+function getCombatLogEncounterKey() {
+  return `${state.campaignId || DEFAULT_CAMPAIGN_ID}:${state.route?.loop || 0}:${state.encounterIdx}`;
+}
+
+function renderCombatLog() {
+  if (isHeadlessEnv()) return;
+  const entriesEl = getEl("combat-log-entries");
+  const statusEl = getEl("combat-log-status");
+  if (!entriesEl || !statusEl) return;
+  statusEl.textContent = `${combatLogEntries.length} event${combatLogEntries.length === 1 ? "" : "s"} recorded for this encounter (up to ${MAX_COMBAT_LOG_ENTRIES}).`;
+  entriesEl.innerHTML = combatLogEntries.length > 0
+    ? combatLogEntries.map(entry => `
+        <li class="combat-log-entry combat-log-${entry.type}">
+          <span class="combat-log-turn">Turn ${entry.turn}</span>
+          <strong>${COMBAT_LOG_EVENT_LABELS[entry.type] || "Event"}</strong>
+          <span class="combat-log-message">${escapeHtmlText(entry.message)}</span>
+        </li>
+      `).join("")
+    : `<li class="combat-log-empty">No combat events recorded yet.</li>`;
+  entriesEl.scrollTop = entriesEl.scrollHeight;
+}
+
+function refreshCombatLogView() {
+  try {
+    renderCombatLog();
+  } catch (error) {
+    console.error("[Combat Log] Failed to render encounter history.", error);
+    const statusEl = getEl("combat-log-status");
+    if (statusEl) statusEl.textContent = "Combat log could not be displayed. See the console for details.";
+  }
+}
+
+function resetCombatLogForEncounter() {
+  combatLogEntries = [];
+  combatLogSequence = 0;
+  combatLogEncounterKey = getCombatLogEncounterKey();
+  refreshCombatLogView();
+}
+
+function emitCombatLogEvent(type, message, details = {}) {
+  const eventType = Object.prototype.hasOwnProperty.call(COMBAT_LOG_EVENT_LABELS, type) ? type : "trigger";
+  const encounterKey = getCombatLogEncounterKey();
+  if (combatLogEncounterKey !== encounterKey) resetCombatLogForEncounter();
+  const safeDetails = {};
+  if (details && typeof details === "object" && !Array.isArray(details)) {
+    Object.entries(details).slice(0, 8).forEach(([key, value]) => {
+      if (typeof value === "string") safeDetails[key.slice(0, 40)] = value.slice(0, 120);
+      else if (typeof value === "number" && Number.isFinite(value)) safeDetails[key.slice(0, 40)] = value;
+      else if (typeof value === "boolean") safeDetails[key.slice(0, 40)] = value;
+    });
+  }
+  const entry = {
+    id: ++combatLogSequence,
+    turn: Math.max(0, Math.floor(Number(state.turn) || 0)),
+    type: eventType,
+    message: String(message || "Combat event").slice(0, 320),
+    timestamp: Date.now(),
+    details: safeDetails
+  };
+  combatLogEntries.push(entry);
+  if (combatLogEntries.length > MAX_COMBAT_LOG_ENTRIES) {
+    combatLogEntries.splice(0, combatLogEntries.length - MAX_COMBAT_LOG_ENTRIES);
+  }
+  refreshCombatLogView();
+  return entry;
+}
+
+function getCombatLogEntries() {
+  return combatLogEntries.map(entry => ({ ...entry, details: { ...entry.details } }));
+}
+
+function openCombatLogModal() {
+  if (isHeadlessEnv()) return;
+  renderCombatLog();
+  safeShowModal("combat-log-dialog");
 }
 
 const logHistory = [];
@@ -1875,7 +2659,7 @@ function setLog(msg) {
   const strip = getEl("combat-log-strip");
   if (strip) {
     strip.textContent = msg;
-    strip.title = logHistory.join("\n");
+    strip.title = `Open detailed combat log\n${logHistory.join("\n")}`;
   }
 
   // Staggered enemy retaliation visual sequence when enemies strike at end of turn
@@ -1888,8 +2672,10 @@ function setLog(msg) {
       const uid = cardEl.dataset.enemyUid;
       const ec = state.enemyCreatures.find(b => b.uid === uid);
       const strikePow = ec ? ec.power + bonusPow : 1;
-      setTimeout(() => {
-        if (!prefersReducedMotion() && typeof cardEl.animate === "function") {
+      const strikeDelay = getCombatAnimationDelay(idx * 75);
+      const strikeDuration = getCombatAnimationDelay(300);
+      const showStrike = () => {
+        if (strikeDuration > 0 && typeof cardEl.animate === "function") {
           try {
             cardEl.animate(
               [
@@ -1897,7 +2683,7 @@ function setLog(msg) {
                 { transform: "translateY(26px) scale(1.08)", offset: 0.45 },
                 { transform: "translateY(0px) scale(1)" }
               ],
-              { duration: 300, easing: "cubic-bezier(0.18, 1.35, 0.36, 1)" }
+              { duration: strikeDuration, easing: "cubic-bezier(0.18, 1.35, 0.36, 1)" }
             );
           } catch (_) {}
         }
@@ -1905,7 +2691,9 @@ function setLog(msg) {
         if (lifeChip) {
           spawnFloatingNumber(lifeChip, `-${strikePow} HP`, "dmg-player", strikePow);
         }
-      }, idx * 75);
+      };
+      if (strikeDelay > 0) setTimeout(showStrike, strikeDelay);
+      else showStrike();
     });
     if (enc && enc.staxDrain && lifeChip) {
       spawnFloatingNumber(lifeChip, `-${enc.staxDrain} Drain`, "dmg-player", enc.staxDrain);
@@ -1936,7 +2724,263 @@ function spawnFx(text, borderColor = "#ffbe3b") {
   el.style.left = `${45 + (Math.random() * 18 - 9)}%`;
   el.style.top = `${42 + (Math.random() * 16 - 8)}%`;
   layer.appendChild(el);
-  setTimeout(() => el.remove(), 1100);
+  setTimeout(() => el.remove(), getCombatAnimationDelay(1100));
+}
+
+function showLocalPlayabilityFeedback(card, message) {
+  if (isHeadlessEnv()) return false;
+  const feedback = getEl("hand-play-feedback");
+  if (!feedback || !card || !message) return false;
+
+  if (invalidPlayFeedbackTimer) clearTimeout(invalidPlayFeedbackTimer);
+  feedback.textContent = message;
+  feedback.hidden = false;
+  feedback.dataset.kind = "error";
+  const cardEl = queryAll("#player-hand [data-hand-uid]")
+    .find(el => el.dataset.handUid === card.uid);
+  if (cardEl) {
+    const previousTimer = invalidCardFeedbackTimers.get(cardEl);
+    if (previousTimer) clearTimeout(previousTimer);
+    cardEl.classList.remove("play-invalid-feedback");
+    void cardEl.offsetWidth;
+    cardEl.classList.add("play-invalid-feedback");
+    if (prefersReducedMotion()) cardEl.classList.add("reduced-motion");
+    invalidCardFeedbackTimers.set(cardEl, setTimeout(() => {
+      cardEl.classList.remove("play-invalid-feedback");
+      cardEl.classList.remove("reduced-motion");
+      invalidCardFeedbackTimers.delete(cardEl);
+    }, 440));
+  }
+
+  if (card.type === "Land") {
+    const landStatus = getEl("land-drop-status");
+    if (landStatus) {
+      triggerTransientClass(landStatus, "land-limit-pulse", 440);
+    }
+  } else {
+    const manaBox = queryEl(".mana-pool-box");
+    if (manaBox) {
+      triggerTransientClass(manaBox, "mana-shortage-pulse", 440);
+    }
+  }
+
+  invalidPlayFeedbackTimer = setTimeout(() => {
+    feedback.hidden = true;
+    feedback.textContent = "";
+    invalidPlayFeedbackTimer = null;
+  }, 3200);
+  return true;
+}
+
+function clearLocalPlayabilityFeedback() {
+  if (invalidPlayFeedbackTimer) {
+    clearTimeout(invalidPlayFeedbackTimer);
+    invalidPlayFeedbackTimer = null;
+  }
+  const feedback = getEl("hand-play-feedback");
+  if (feedback) {
+    feedback.hidden = true;
+    feedback.textContent = "";
+  }
+}
+
+function showCardPlayImpact(card) {
+  if (isHeadlessEnv() || !card) return false;
+
+  let target = null;
+  let effectClass = "fx-play-impact-spell";
+  if (card.type === "Creature") {
+    target = queryAll("#player-creatures [data-creature-uid]")
+      .find(el => el.dataset.creatureUid === card.uid);
+    effectClass = "fx-play-impact-creature";
+    if (target) {
+      triggerTransientClass(target, "creature-grounded-thump", 360);
+    }
+  } else if (card.type === "Land") {
+    target = queryAll("#player-lands [data-land-uid]")
+      .find(el => el.dataset.landUid === card.uid);
+    effectClass = "fx-play-impact-land";
+    const manaRow = getEl("mana-pool-display") || queryEl(".mana-pool-box");
+    if (manaRow) {
+      triggerTransientClass(manaRow, "mana-row-ripple", 420);
+    }
+  } else {
+    target = queryEl(".battlefield-table");
+  }
+  if (!target || typeof target.getBoundingClientRect !== "function") return false;
+
+  const rect = target.getBoundingClientRect();
+  if (!rect || (!rect.width && !rect.height)) return false;
+  const layer = ensureFxLayerTop() || getEl("fx-layer");
+  if (!layer) return false;
+
+  const impact = document.createElement("span");
+  impact.className = `fx-play-impact ${effectClass}${prefersReducedMotion() ? " reduced-motion" : ""}`;
+  impact.setAttribute("aria-hidden", "true");
+  const impactColors = {
+    G: ["#2ecc71", "rgba(46, 204, 113, 0.14)", "rgba(46, 204, 113, 0.42)"],
+    R: ["#ff6b6b", "rgba(255, 107, 107, 0.14)", "rgba(255, 107, 107, 0.42)"],
+    B: ["#9b59b6", "rgba(155, 89, 182, 0.14)", "rgba(155, 89, 182, 0.42)"],
+    U: ["#3498db", "rgba(52, 152, 219, 0.14)", "rgba(52, 152, 219, 0.42)"],
+    W: ["#f1c40f", "rgba(241, 196, 15, 0.14)", "rgba(241, 196, 15, 0.42)"],
+    C: ["#9ba8bd", "rgba(155, 168, 189, 0.14)", "rgba(155, 168, 189, 0.42)"]
+  };
+  const colorSource = card.type === "Land" && Array.isArray(card.produces)
+    ? card.produces
+    : [card.color];
+  const colorId = colorSource.map(color => String(color || "").toUpperCase())
+    .flatMap(color => color.split(""))
+    .find(color => impactColors[color]);
+  const [color, fill, glow] = impactColors[colorId] || impactColors.B;
+  impact.style.setProperty("--impact-color", color);
+  impact.style.setProperty("--impact-fill", fill);
+  impact.style.setProperty("--impact-glow", glow);
+  impact.style.left = `${rect.left + rect.width / 2}px`;
+  impact.style.top = `${rect.top + rect.height / 2}px`;
+  layer.appendChild(impact);
+  setTimeout(() => impact.remove(), prefersReducedMotion() ? 420 : 520);
+  return true;
+}
+
+function showDropZoneSuccess(zone) {
+  if (isHeadlessEnv()) return false;
+  const target = zone === "lands"
+    ? getEl("player-lands")?.closest(".land-lane")
+    : (zone === "creatures"
+      ? getEl("player-creatures")?.closest(".player-lane")
+      : (zone === "table" ? queryEl(".battlefield-table") : null));
+  if (!target) return false;
+  const className = zone === "lands"
+    ? "drop-success-land"
+    : (zone === "creatures" ? "drop-success-creature" : "drop-success-spell");
+  const previousTimer = dropZoneSuccessTimers.get(target);
+  if (previousTimer) clearTimeout(previousTimer);
+  target.classList.remove(className);
+  void target.offsetWidth;
+  target.classList.add(className);
+  if (prefersReducedMotion()) target.classList.add("reduced-motion");
+  dropZoneSuccessTimers.set(target, setTimeout(() => {
+    target.classList.remove(className);
+    target.classList.remove("reduced-motion");
+    dropZoneSuccessTimers.delete(target);
+  }, 420));
+  return true;
+}
+
+function getCardCollectionColorIds(card) {
+  if (!card || typeof card !== "object") return [];
+  if (card.type === "Land" && card.isFetch) return [...COLORS];
+  if (card.type === "Land" && Array.isArray(card.produces)) {
+    return [...new Set(card.produces)];
+  }
+  if (card.color === "C") return ["C"];
+
+  const parsed = typeof parseManaCost === "function" ? parseManaCost(card.manaCost || "") : null;
+  const manaColors = parsed
+    ? COLORS.filter(color => parsed.pips[color] > 0)
+    : [];
+  if (manaColors.length > 0) return manaColors;
+  return COLORS.includes(card.color) ? [card.color] : [];
+}
+
+function getCardCollectionTypes(cards = Object.values(CARD_DB)) {
+  return [...new Set(cards
+    .filter(card => card && typeof card.type === "string")
+    .map(card => card.type))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function getCardCollectionManaValue(card) {
+  return typeof parseManaCost === "function"
+    ? parseManaCost(card?.manaCost || "").total
+    : 0;
+}
+
+function filterCardCollection(cards, filters = {}) {
+  if (!Array.isArray(cards)) return [];
+  const query = String(filters.query || "").trim().toLocaleLowerCase();
+  const color = filters.color || "all";
+  const type = filters.type || "all";
+  const sort = filters.sort || "name";
+  const matches = cards.filter(card => {
+    if (!card || typeof card !== "object") return false;
+    if (color !== "all" && !getCardCollectionColorIds(card).includes(color)) return false;
+    if (type !== "all" && card.type !== type) return false;
+    if (!query) return true;
+    const searchable = [
+      card.name,
+      card.type,
+      card.subtype,
+      card.manaCost,
+      card.rules,
+      ...(Array.isArray(card.keywords) ? card.keywords : [])
+    ].filter(Boolean).join(" ").toLocaleLowerCase();
+    return searchable.includes(query);
+  });
+
+  return matches.sort((a, b) => {
+    if (sort === "mana") {
+      return getCardCollectionManaValue(a) - getCardCollectionManaValue(b) ||
+        String(a.name || "").localeCompare(String(b.name || ""));
+    }
+    if (sort === "type") {
+      return String(a.type || "").localeCompare(String(b.type || "")) ||
+        String(a.name || "").localeCompare(String(b.name || ""));
+    }
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+}
+
+function renderCardCollectionCard(card) {
+  const isCreature = card.type === "Creature";
+  const color = escapeHtmlText(card.color || "C");
+  return `
+    <article class="inspector-card collection-card card-color-${color}" aria-label="${escapeHtmlText(`${card.name}, ${card.type}`)}">
+      ${renderCardArtHtml(card, "inspector")}
+      <div>
+        <div class="card-top-bar">
+          <span class="card-title">${escapeHtmlText(card.name)}</span>
+          ${renderManaCostHtml(card)}
+        </div>
+        <div class="card-type-line">${escapeHtmlText(card.type)}${card.subtype ? ` — ${escapeHtmlText(card.subtype)}` : ""}</div>
+      </div>
+      <div class="card-rules">${escapeHtmlText(card.rules || "")}</div>
+      <div class="card-bottom-bar">
+        <span>${escapeHtmlText((card.keywords || []).join(" • "))}</span>
+        ${isCreature ? `<span class="pt-box">${Number(card.power) || 0}/${Number(card.toughness) || 0}</span>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderCardCollection() {
+  const results = getEl("collection-results");
+  const count = getEl("collection-result-count");
+  if (!results || !count) return;
+  const cards = filterCardCollection(Object.values(CARD_DB), {
+    query: getEl("collection-search")?.value || "",
+    color: getEl("collection-color-filter")?.value || "all",
+    type: getEl("collection-type-filter")?.value || "all",
+    sort: getEl("collection-sort")?.value || "name"
+  });
+  count.textContent = `${cards.length} of ${Object.keys(CARD_DB).length} cards`;
+  results.innerHTML = cards.length > 0
+    ? cards.map(renderCardCollectionCard).join("")
+    : `<div class="collection-empty">No cards match those filters. Try a different search, color, or type.</div>`;
+}
+
+function openCardCollectionModal() {
+  if (isHeadlessEnv()) return;
+  const dialog = getEl("card-collection-dialog");
+  if (!dialog) return;
+  const typeFilter = getEl("collection-type-filter");
+  if (typeFilter && typeFilter.options.length <= 1) {
+    typeFilter.innerHTML += getCardCollectionTypes()
+      .map(type => `<option value="${escapeHtmlText(type)}">${escapeHtmlText(type)}</option>`)
+      .join("");
+  }
+  renderCardCollection();
+  safeShowModal(dialog);
 }
 
 function openDeckInspector(title, desc, cards) {
@@ -1996,27 +3040,96 @@ function openNewRunModal(forceChoice = false, customTitle = null, customDesc = n
     customDesc || "Each 40-card deck mixes 17 Lands (including Fetch Lands) and 23 Spells, plus 1 starting Command Zone Relic."
   );
 
+  const challengeSelect = getEl("run-challenge-select");
+  if (challengeSelect && Array.isArray(RUN_CHALLENGES)) {
+    challengeSelect.innerHTML = RUN_CHALLENGES.map(challenge =>
+      `<option value="${challenge.id}">${challenge.name}</option>`
+    ).join("");
+    challengeSelect.value = RUN_CHALLENGES.some(challenge => challenge.id === state.challengeId)
+      ? state.challengeId
+      : "standard";
+    updateRunChallengeDescription();
+  }
+
+  const campaignSelect = getEl("run-campaign-select");
+  if (campaignSelect && Array.isArray(CAMPAIGN_DEFINITIONS)) {
+    campaignSelect.innerHTML = CAMPAIGN_DEFINITIONS.map(campaign =>
+      `<option value="${campaign.id}">${campaign.name}</option>`
+    ).join("");
+    campaignSelect.value = CAMPAIGN_DEFINITIONS.some(campaign => campaign.id === state.campaignId)
+      ? state.campaignId
+      : DEFAULT_CAMPAIGN_ID;
+    updateRunCampaignDescription();
+  }
+
+  const seedInput = getEl("run-seed-input");
+  if (seedInput) seedInput.value = state.runSeed || "";
+  if (typeof getStarterDeckProgressMessage === "function") {
+    setText("starter-unlock-status", getStarterDeckProgressMessage());
+  }
+
   const grid = getEl("starter-decks-grid");
   if (grid) {
-    const availableDecks = typeof getAvailableStarterDecks === "function"
-      ? getAvailableStarterDecks()
-      : STARTER_DECKS;
-    const decksToRender = availableDecks.length > 0 ? availableDecks : STARTER_DECKS;
-    grid.innerHTML = decksToRender.map(d => {
+    grid.innerHTML = STARTER_DECKS.map(d => {
       const idx = STARTER_DECKS.indexOf(d);
       const relicDef = RELIC_DB.find(r => r.id === d.startingRelic);
+      const available = typeof isStarterDeckAvailable !== "function" || isStarterDeckAvailable(d.id);
+      const requirement = STARTER_DECK_UNLOCK_REQUIREMENTS[d.id];
+      const lockedLabel = requirement
+        ? `🔒 Locked — ${requirement.description} to unlock`
+        : "🔒 Locked";
       return `
-        <button type="button" class="starter-deck-box" data-starter-idx="${idx >= 0 ? idx : 0}" data-starter-id="${d.id}">
+        <button type="button" class="starter-deck-box${available ? "" : " starter-deck-locked"}" data-starter-idx="${idx >= 0 ? idx : 0}" data-starter-id="${d.id}"${available ? "" : ' disabled aria-disabled="true"'}>
           <span class="plane-badge">${d.badge}</span>
           <h3>${d.name}</h3>
           <p class="relic-desc">${d.desc}</p>
           <div class="zone-hint">Starting Relic: <strong>${relicDef ? relicDef.name : d.startingRelic}</strong></div>
-          <span class="btn-combat" style="margin-top:auto">Play This 40-Card Deck</span>
+          <span class="${available ? "btn-combat" : "starter-deck-lock-label"}" style="margin-top:auto">${available ? "Play This 40-Card Deck" : lockedLabel}</span>
         </button>
       `;
     }).join("");
   }
   safeShowModal(dialog);
+}
+
+function updateRunChallengeDescription() {
+  const challengeSelect = getEl("run-challenge-select");
+  const challenge = typeof getRunChallengeById === "function"
+    ? getRunChallengeById(challengeSelect ? challengeSelect.value : "standard")
+    : null;
+  if (challenge) setText("run-challenge-desc", challenge.description);
+}
+
+function updateRunCampaignDescription() {
+  const campaignSelect = getEl("run-campaign-select");
+  const campaign = typeof getCampaignById === "function"
+    ? getCampaignById(campaignSelect ? campaignSelect.value : "blind_eternities")
+    : null;
+  if (campaign) setText("run-campaign-desc", campaign.description);
+}
+
+async function copyRunSeed() {
+  const seedInput = getEl("run-seed-input");
+  const seed = typeof normalizeRunSeed === "function"
+    ? normalizeRunSeed(seedInput ? seedInput.value : "")
+    : null;
+  if (!seed) {
+    setText("run-seed-desc", "Enter a seed or choose Use Daily Seed before copying.");
+    return false;
+  }
+  if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(seed);
+      setText("run-seed-desc", `Copied seed "${seed}" to the clipboard.`);
+      return true;
+    } catch (error) {
+      setText("run-seed-desc", `Clipboard access failed: ${error?.message || error}. Select the seed field and copy it manually.`);
+      return false;
+    }
+  }
+  setText("run-seed-desc", "Clipboard access is unavailable. Select the seed field and copy it manually.");
+  if (seedInput && typeof seedInput.select === "function") seedInput.select();
+  return false;
 }
 
 function openVictoryModal(enc, earned, healed) {
@@ -2026,9 +3139,11 @@ function openVictoryModal(enc, earned, healed) {
     safeShowModal("shop-dialog");
     return;
   }
+  const campaign = typeof getActiveCampaign === "function" ? getActiveCampaign() : null;
+  setText("victory-badge", campaign ? campaign.victoryBadge : "CAMPAIGN CONQUERED");
   setText(
     "victory-summary",
-    `You shattered ${enc.name} and conquered Plane 2 with ${state.deckArchetype.name}! (+$${earned} Gold${healed > 0 ? `, +${healed} Life` : ""})`
+    `${campaign ? campaign.ending : `You defeated ${enc.name} and completed the campaign.`} (+$${earned} Gold${healed > 0 ? `, +${healed} Life` : ""})`
   );
   const statsEl = getEl("victory-stats");
   if (statsEl) {
@@ -2047,6 +3162,8 @@ function openDraftModal(enc) {
   const dialog = getEl("draft-dialog");
   if (!dialog) return;
 
+  safeCloseModal("shop-dialog");
+  safeCloseModal("victory-dialog");
   const currentEnc = enc || (typeof getCurrentEncounter === "function" ? getCurrentEncounter() : null);
   if (currentEnc) {
     setText("draft-plane-badge", `VICTORY • ${currentEnc.name.toUpperCase()} DEFEATED`);
@@ -2063,7 +3180,7 @@ function renderDraftModal() {
   const grid = getEl("draft-card-grid");
   if (!grid) return;
 
-  setText("draft-gold", `$${state.gold}`);
+  setResourceText("draft-gold", `$${state.gold}`);
   setText("draft-deck-count", `${state.masterDeck.length} Cards`);
 
   if (!state.pendingDraft || !Array.isArray(state.pendingDraft.choices) || state.pendingDraft.choices.length === 0) {
@@ -2072,9 +3189,9 @@ function renderDraftModal() {
   }
 
   const choices = state.pendingDraft.choices;
+  const entranceDuration = getCombatAnimationDelay(380);
   grid.innerHTML = choices.map((item, idx) => {
-    const cardId = typeof item === "string" ? item : (item && item.id ? item.id : null);
-    const card = cardId && typeof CARD_DB !== "undefined" ? CARD_DB[cardId] : item;
+    const card = resolveDraftCard(item);
     if (!card) return "";
 
     const isCreature = card.type === "Creature";
@@ -2084,13 +3201,15 @@ function renderDraftModal() {
     const manaHtml = typeof renderManaCostHtml === "function" ? renderManaCostHtml(card) : "";
 
     return `
-      <div class="draft-card card card-color-${card.color}${foilCls}" data-draft-idx="${idx}" data-card-id="${card.id}">
+      <div class="draft-card card card-color-${card.color}${foilCls}${entranceDuration > 0 ? " reward-card-enter" : ""}"
+        data-draft-idx="${idx}" data-card-id="${card.id}"
+        style="--reward-enter-duration:${entranceDuration}ms;--reward-enter-delay:${getCombatAnimationDelay(idx * 65)}ms">
         <div class="draft-card-content">
           <div class="draft-card-header">
             <span class="draft-card-title">${card.name}</span>
             ${manaHtml}
           </div>
-          <div class="draft-card-type">${card.type}${card.subtype ? ` — ${card.subtype}` : ""}</div>
+          <div class="draft-card-type">${card.type}${card.subtype ? ` — ${card.subtype}` : ""}${card.generated ? " • Generated" : ""}</div>
           <div class="draft-card-rules">${card.rules || ""}</div>
         </div>
         <div class="draft-card-bottom">
@@ -2104,6 +3223,15 @@ function renderDraftModal() {
       </div>
     `;
   }).join("");
+}
+
+function resolveDraftCard(item) {
+  if (typeof item === "string") {
+    return typeof CARD_DB !== "undefined" ? CARD_DB[item] : null;
+  }
+  if (!item || typeof item !== "object") return null;
+  const card = item.generatedDefinition || item;
+  return typeof CARD_DB !== "undefined" && CARD_DB[card.id] ? CARD_DB[card.id] : card;
 }
 
 function closeDraftModal() {
@@ -2120,7 +3248,33 @@ function presentVictoryOrShopModal(enc, earned, healed, badgeText, summaryText) 
   setText("victory-reward-summary", summaryText);
   renderShop();
   renderAll();
-  if (state.encounterIdx === ENCOUNTERS.length - 1) {
+  const campaignEncounters = typeof getActiveCampaignEncounters === "function"
+    ? getActiveCampaignEncounters()
+    : ENCOUNTERS;
+  const isCampaignClear = state.encounterIdx % campaignEncounters.length === campaignEncounters.length - 1;
+  const resultDialogId = isCampaignClear
+    ? "victory-dialog"
+    : (state.pendingDraft && !state.pendingDraft.resolved ? "draft-dialog" : "shop-dialog");
+  const resultDialog = getEl(resultDialogId);
+  if (resultDialog?.classList) {
+    const transitionDuration = getCombatAnimationDelay(520);
+    resultDialog.classList.add("boss-victory-transition");
+    if (transitionDuration === 0) resultDialog.classList.add("reduced-motion");
+    if (resultDialog.style?.removeProperty) {
+      resultDialog.style.removeProperty("--boss-victory-transition-duration");
+    }
+    if (transitionDuration > 0 && resultDialog.style?.setProperty) {
+      resultDialog.style.setProperty("--boss-victory-transition-duration", `${transitionDuration}ms`);
+    }
+    setTimeout(() => {
+      resultDialog.classList.remove("boss-victory-transition", "reduced-motion");
+      if (resultDialog.style?.removeProperty) {
+        resultDialog.style.removeProperty("--boss-victory-transition-duration");
+      }
+    }, transitionDuration || 220);
+  }
+
+  if (isCampaignClear) {
     openVictoryModal(enc, earned, healed);
   } else if (state.pendingDraft && !state.pendingDraft.resolved) {
     openDraftModal(enc);
@@ -2145,7 +3299,10 @@ function renderRouteModal(forceChoice = false) {
   if (isHeadlessEnv()) return;
   const dialog = getEl("route-dialog");
   const grid = getEl("route-map-grid");
-  if (!dialog || !grid || typeof CAMPAIGN_ROUTE_NODES === "undefined") return;
+  const routeNodes = typeof getActiveCampaignRouteNodes === "function"
+    ? getActiveCampaignRouteNodes()
+    : CAMPAIGN_ROUTE_NODES;
+  if (!dialog || !grid || !Array.isArray(routeNodes)) return;
 
   const route = typeof ensureRouteState === "function" ? ensureRouteState() : state.route;
   const availableNext = typeof getAvailableNextRouteNodes === "function" ? getAvailableNextRouteNodes() : [];
@@ -2154,9 +3311,15 @@ function renderRouteModal(forceChoice = false) {
   const visitedIds = new Set(route && Array.isArray(route.visitedNodeIds) ? route.visitedNodeIds : []);
   const currentId = route ? route.currentNodeId : "p1_start";
   const currentNode = typeof getCurrentRouteNode === "function" ? getCurrentRouteNode() : null;
+  const pendingEvent = route && route.pendingEventId && typeof getRouteNodeById === "function"
+    ? getRouteNodeById(route.pendingEventId)
+    : null;
   const currentStep = currentNode ? currentNode.step : 0;
 
-  const mustChoose = Boolean((forceChoice || (route && route.pendingSelection)) && availableIds.size > 0);
+  const mustChoose = Boolean(
+    pendingEvent ||
+    ((forceChoice || (route && route.pendingSelection)) && availableIds.size > 0)
+  );
   routeForceChoice = mustChoose;
 
   if (typeof dialog.setAttribute === "function") {
@@ -2169,21 +3332,28 @@ function renderRouteModal(forceChoice = false) {
 
   const loopNum = (route && route.loop ? route.loop : 0) + 1;
   const loopSuffix = loopNum > 1 ? ` • LOOP ${loopNum}` : "";
+  const campaign = typeof getActiveCampaign === "function" ? getActiveCampaign() : null;
   setText(
     "route-plane-badge",
-    mustChoose
-      ? `CHOOSE NEXT STOP • PLANAR ROUTE MAP${loopSuffix}`
-      : `BLIND ETERNITIES • PLANAR ROUTE MAP${loopSuffix}`
+    pendingEvent
+      ? `PLANAR EVENT • ${pendingEvent.title.toUpperCase()}`
+      : (mustChoose
+      ? `CHOOSE NEXT STOP • ${campaign ? campaign.name.toUpperCase() : "PLANAR ROUTE"}${loopSuffix}`
+      : `${campaign ? campaign.name.toUpperCase() : "PLANAR ROUTE"} • ROUTE MAP${loopSuffix}`)
   );
   setText(
     "route-dialog-title",
-    mustChoose ? "Choose Your Next Planar Stop" : "Blind Eternities Planar Route"
+    pendingEvent
+      ? `Resolve ${pendingEvent.title}`
+      : (mustChoose ? "Choose Your Next Planar Stop" : "Blind Eternities Planar Route")
   );
   setText(
     "route-dialog-desc",
-    mustChoose
-      ? "Select a connected node below to travel to your next destination. Rest Sites and Planar Events resolve immediately on the route map."
-      : "Inspect your journey across Plane 1 and Plane 2. Defeat the current Ward to unlock the next branching stop."
+    pendingEvent
+      ? pendingEvent.desc
+      : (mustChoose
+      ? "Select a connected node below. Rest Sites resolve immediately; Planar Events offer risk/reward choices."
+      : "Inspect your journey across Plane 1 and Plane 2. Defeat the current Ward to unlock the next branching stop.")
   );
 
   const banner = getEl("route-activity-banner");
@@ -2197,8 +3367,31 @@ function renderRouteModal(forceChoice = false) {
     }
   }
 
+  if (pendingEvent) {
+    const choices = Array.isArray(pendingEvent.choices) ? pendingEvent.choices : [];
+    grid.innerHTML = `
+      <div class="route-event-choice-grid" role="group" aria-label="${pendingEvent.title} choices">
+        ${choices.map(choice => {
+          const status = typeof getRouteEventChoiceStatus === "function"
+            ? getRouteEventChoiceStatus(choice.id)
+            : { available: false, reason: "Event choices are unavailable." };
+          return `
+            <button type="button" class="route-event-choice" data-route-event-choice-id="${choice.id}"
+              ${status.available ? "" : "disabled"}
+              aria-label="${choice.title}. ${choice.desc}${status.reason ? ` ${status.reason}` : ""}">
+              <strong>${choice.title}</strong>
+              <span>${choice.desc}</span>
+              ${status.reason ? `<small>${status.reason}</small>` : ""}
+            </button>
+          `;
+        }).join("")}
+      </div>
+    `;
+    return;
+  }
+
   const stepsMap = new Map();
-  CAMPAIGN_ROUTE_NODES.forEach(node => {
+  routeNodes.forEach(node => {
     if (!stepsMap.has(node.step)) stepsMap.set(node.step, []);
     stepsMap.get(node.step).push(node);
   });
@@ -2235,7 +3428,7 @@ function renderRouteModal(forceChoice = false) {
       }
 
       const nextTitles = (node.next || [])
-        .map(nid => CAMPAIGN_ROUTE_NODES.find(n => n.id === nid))
+        .map(nid => routeNodes.find(n => n.id === nid))
         .filter(Boolean)
         .map(n => n.title);
       const leadsToHtml = nextTitles.length > 0
@@ -2280,6 +3473,124 @@ function openRouteModal(forceChoice = false) {
   const dialog = getEl("route-dialog");
   if (!dialog) return;
   renderRouteModal(forceChoice);
+  const entranceDuration = getCombatAnimationDelay(360);
+  if (entranceDuration > 0) {
+    dialog.style.setProperty("--route-scene-duration", `${entranceDuration}ms`);
+    dialog.classList.remove("route-scene-entering");
+    void dialog.offsetWidth;
+    dialog.classList.add("route-scene-entering");
+    setTimeout(() => dialog.classList.remove("route-scene-entering"), entranceDuration);
+  }
+  safeShowModal(dialog);
+}
+
+function selectRouteNodeWithTransition(nodeId, node, button, dialog, grid) {
+  if (routeSelectionPending) return false;
+  const finishSelection = () => {
+    routeSelectionPending = false;
+    dialog.classList.remove("route-selection-pending");
+    dialog.removeAttribute("aria-busy");
+    grid.removeAttribute("aria-busy");
+    grid.style.pointerEvents = "";
+    button.classList.remove("route-node-selected");
+
+    const ok = typeof selectRouteNode === "function" ? selectRouteNode(nodeId) : false;
+    if (!ok) return;
+    if (!node || node.type === "fight" || node.type === "elite" || node.type === "boss" || node.type === "shop") {
+      routeForceChoice = false;
+      safeCloseModal(dialog);
+    } else {
+      renderRouteModal(true);
+    }
+  };
+
+  const transitionDuration = getCombatAnimationDelay(190);
+  if (transitionDuration <= 0) {
+    finishSelection();
+    return true;
+  }
+
+  routeSelectionPending = true;
+  dialog.classList.add("route-selection-pending");
+  dialog.style.setProperty("--route-scene-duration", `${transitionDuration}ms`);
+  dialog.setAttribute("aria-busy", "true");
+  grid.setAttribute("aria-busy", "true");
+  grid.style.pointerEvents = "none";
+  button.classList.add("route-node-selected");
+  setTimeout(finishSelection, transitionDuration);
+  return true;
+}
+
+function escapeHtmlText(value) {
+  return String(value).replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;"
+  }[character]));
+}
+
+function renderRunHistory() {
+  if (isHeadlessEnv()) return;
+  const status = getEl("run-history-status");
+  const list = getEl("run-history-list");
+  if (!status || !list || typeof readRunHistory !== "function") return;
+
+  const history = readRunHistory();
+  if (!history.ok) {
+    status.textContent = history.error || "Run history could not be loaded.";
+    list.innerHTML = "";
+    return;
+  }
+  if (state.runHistoryError) {
+    status.textContent = `History loaded, but the latest run could not be recorded: ${state.runHistoryError}`;
+  } else {
+    status.textContent = `${history.entries.length} completed run${history.entries.length === 1 ? "" : "s"} stored (up to ${MAX_RUN_HISTORY_ENTRIES}).`;
+  }
+  if (history.entries.length === 0) {
+    list.innerHTML = `<div class="run-history-empty">No completed runs yet. Your victories and defeats will appear here.</div>`;
+    return;
+  }
+
+  list.innerHTML = history.entries.map(record => {
+    const campaign = getCampaignById(record.campaignId);
+    const challenge = getRunChallengeById(record.challengeId);
+    const routeNodes = getCampaignRouteNodes(record.campaignId);
+    const routeNodeById = new Map(routeNodes.map(node => [node.id, node]));
+    const route = record.routeNodeIds
+      .map(id => routeNodeById.get(id)?.title || id)
+      .map(escapeHtmlText)
+      .join(" → ");
+    const relics = record.relicIds
+      .map(id => RELIC_DB.find(relic => relic.id === id)?.name || id)
+      .map(escapeHtmlText);
+    const completedAt = new Date(record.completedAt);
+    const dateValid = Number.isFinite(completedAt.getTime());
+    const dateText = dateValid ? completedAt.toLocaleString() : "Unknown date";
+    const dateAttribute = dateValid ? completedAt.toISOString() : "";
+    const outcomeLabel = record.outcome === "victory" ? "CAMPAIGN CLEARED" : "RUN DEFEATED";
+    return `
+      <article class="run-history-entry run-history-${record.outcome}">
+        <div class="run-history-entry-top">
+          <strong>${outcomeLabel}</strong>
+          <time datetime="${escapeHtmlText(dateAttribute)}">${escapeHtmlText(dateText)}</time>
+        </div>
+        <h3>${escapeHtmlText(record.deckName)}</h3>
+        <p>${escapeHtmlText(campaign.name)} • ${escapeHtmlText(challenge.name)} • ${record.runSeed ? `Seed: ${escapeHtmlText(record.runSeed)}` : "Unseeded"}</p>
+        <p>Final stop: <strong>${escapeHtmlText(record.finalEncounter)}</strong> • ${record.turns} turns • Loop ${record.loop + 1}</p>
+        <p>Life ${record.life} • $${record.gold} • Relics: ${relics.length ? relics.join(", ") : "None"}</p>
+        <p class="run-history-route">Route: ${route || "No route recorded"}</p>
+      </article>
+    `;
+  }).join("");
+}
+
+function openRunHistoryModal() {
+  if (isHeadlessEnv()) return;
+  const dialog = getEl("run-history-dialog");
+  if (!dialog) return;
+  renderRunHistory();
   safeShowModal(dialog);
 }
 
@@ -2728,7 +4039,10 @@ function createHandDragController(config = {}) {
         const playable = canPlayCard(dragState.card);
         if (!playable && dragState.cardEl) {
           if (dragState.cardEl.classList) dragState.cardEl.classList.add("drag-invalid");
-          const reason = dragState.card.type === "Land" ? "Land Limit" : "Missing Mana Pips";
+          const lifeCost = Math.max(0, Math.floor(Number(dragState.card.lifeCost) || 0));
+          const reason = lifeCost > 0 && state.playerLife <= lifeCost
+            ? getCardPlayabilityInfo(dragState.card).badge
+            : (dragState.card.type === "Land" ? "Land Limit" : "Missing Mana Pips");
           if (dragState.cardEl.style) dragState.cardEl.style.setProperty("--drag-reason", `"${reason}"`);
         }
 
@@ -2793,6 +4107,7 @@ function createHandDragController(config = {}) {
         if (activeEl && typeof activeEl.getBoundingClientRect === "function") {
           seedPrevHandRect(activeCard.uid, activeEl.getBoundingClientRect());
         }
+        showDropZoneSuccess(zone);
         const playedUid = activeCard.uid;
         resetDragState("dropSuccess");
         playCardFromHand(playedUid);
@@ -2805,6 +4120,8 @@ function createHandDragController(config = {}) {
         } else {
           spawnFx(`Missing Mana Pips for ${activeCard.manaCost}!`, "#ff6b6b");
         }
+        const reason = getCardPlayabilityInfo(activeCard).reason.replace(/^Unplayable:\s*/, "");
+        showLocalPlayabilityFeedback(activeCard, reason);
         if (prefersReducedMotion() || typeof requestAnimationFrame !== "function") {
           resetDragState("invalidDropReducedMotion");
           return;
@@ -2937,6 +4254,27 @@ function renderDesktopSettingsModal() {
     });
   }
 
+  const combatSpeedGroup = getEl("settings-combat-speed-group");
+  if (combatSpeedGroup) {
+    queryAll("[data-combat-speed]", combatSpeedGroup).forEach(btn => {
+      if (btn.classList) btn.classList.toggle("active", btn.dataset.combatSpeed === settings.combatSpeed);
+    });
+  }
+
+  const soundToggle = getEl("settings-sound-enabled");
+  if (soundToggle) soundToggle.checked = Boolean(settings.soundEnabled);
+  const soundVolume = getEl("settings-sound-volume");
+  if (soundVolume) {
+    soundVolume.value = String(Math.round(settings.soundVolume * 100));
+  }
+  const soundVolumeValue = getEl("settings-sound-volume-value");
+  if (soundVolumeValue) soundVolumeValue.textContent = `${Math.round(settings.soundVolume * 100)}%`;
+  if (!soundStatusIsError) {
+    setSoundStatusMessage(settings.soundEnabled
+      ? `Sound effects are on at ${Math.round(settings.soundVolume * 100)}% volume.`
+      : "Sound is muted until you enable it.");
+  }
+
   const saveSummaryEl = getEl("settings-save-summary");
   if (saveSummaryEl) {
     const storageLabel = info.isDesktop
@@ -2971,6 +4309,7 @@ function openDesktopSettingsModal() {
 function initEvents() {
   if (isHeadlessEnv()) return;
 
+  initializeAmbientVisibilityHandling();
   initCardTiltTracking();
 
   if (!activeHandDragController) {
@@ -3121,6 +4460,17 @@ function initEvents() {
     });
   }
 
+  const combatLogStrip = getEl("combat-log-strip");
+  if (combatLogStrip) {
+    combatLogStrip.addEventListener("click", openCombatLogModal);
+    combatLogStrip.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openCombatLogModal();
+      }
+    });
+  }
+
   const viewLibBtn = getEl("btn-view-library");
   if (viewLibBtn) {
     viewLibBtn.addEventListener("click", () => {
@@ -3131,6 +4481,15 @@ function initEvents() {
       );
     });
   }
+
+  const collectionBtn = getEl("btn-open-card-collection");
+  if (collectionBtn) collectionBtn.addEventListener("click", openCardCollectionModal);
+  const collectionSearch = getEl("collection-search");
+  if (collectionSearch) collectionSearch.addEventListener("input", renderCardCollection);
+  ["collection-color-filter", "collection-type-filter", "collection-sort"].forEach(id => {
+    const filter = getEl(id);
+    if (filter) filter.addEventListener("change", renderCardCollection);
+  });
 
   const viewGraveBtn = getEl("btn-view-graveyard");
   if (viewGraveBtn) {
@@ -3148,6 +4507,10 @@ function initEvents() {
     viewRouteBtn.addEventListener("click", () => {
       openRouteModal(Boolean(state.route && state.route.pendingSelection));
     });
+  }
+  const runHistoryBtn = getEl("btn-run-history");
+  if (runHistoryBtn) {
+    runHistoryBtn.addEventListener("click", openRunHistoryModal);
   }
 
   const ladderEl = getEl("encounter-ladder");
@@ -3169,19 +4532,29 @@ function initEvents() {
   const routeGrid = getEl("route-map-grid");
   if (routeGrid) {
     routeGrid.addEventListener("click", (e) => {
+      const eventChoiceBtn = e.target && typeof e.target.closest === "function"
+        ? e.target.closest("[data-route-event-choice-id]")
+        : null;
+      if (eventChoiceBtn && !eventChoiceBtn.disabled) {
+        const eventId = state.route && state.route.pendingEventId;
+        const result = typeof resolveRouteEventChoice === "function"
+          ? resolveRouteEventChoice(eventId, eventChoiceBtn.dataset.routeEventChoiceId)
+          : { ok: false, reason: "Event choices are unavailable." };
+        if (result.ok) {
+          renderRouteModal(true);
+        } else {
+          renderRouteModal(true);
+          setText("route-dialog-desc", result.reason || "Unable to resolve this event choice.");
+        }
+        return;
+      }
+
       const btn = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-route-node-id]") : null;
       if (!btn || btn.disabled) return;
       const nodeId = btn.dataset.routeNodeId;
       if (typeof canSelectRouteNode === "function" && !canSelectRouteNode(nodeId)) return;
       const node = typeof getRouteNodeById === "function" ? getRouteNodeById(nodeId) : null;
-      const ok = typeof selectRouteNode === "function" ? selectRouteNode(nodeId) : false;
-      if (!ok) return;
-      if (!node || node.type === "fight" || node.type === "elite" || node.type === "boss" || node.type === "shop") {
-        routeForceChoice = false;
-        safeCloseModal(routeDialog);
-      } else {
-        renderRouteModal(true);
-      }
+      selectRouteNodeWithTransition(nodeId, node, btn, routeDialog, routeGrid);
     });
   }
 
@@ -3201,6 +4574,37 @@ function initEvents() {
     });
   }
 
+  const challengeSelect = getEl("run-challenge-select");
+  if (challengeSelect) {
+    challengeSelect.addEventListener("change", updateRunChallengeDescription);
+  }
+  const campaignSelect = getEl("run-campaign-select");
+  if (campaignSelect) {
+    campaignSelect.addEventListener("change", updateRunCampaignDescription);
+  }
+  const seedInput = getEl("run-seed-input");
+  if (seedInput) {
+    seedInput.addEventListener("input", () => {
+      setText("run-seed-desc", seedInput.value.trim()
+        ? "Seeded runs reproduce shuffles and rewards. Copy this seed to share the run."
+        : "Use the same seed to replay the same shuffles and rewards. Daily seeds use the UTC date.");
+    });
+  }
+  const dailySeedBtn = getEl("btn-use-daily-seed");
+  if (dailySeedBtn) {
+    dailySeedBtn.addEventListener("click", () => {
+      const dailySeed = typeof getDailyRunSeed === "function" ? getDailyRunSeed() : null;
+      if (!dailySeed) {
+        setText("run-seed-desc", "Unable to determine today's UTC date seed.");
+        return;
+      }
+      if (seedInput) seedInput.value = dailySeed;
+      setText("run-seed-desc", `Today's shared daily seed is "${dailySeed}" (UTC).`);
+    });
+  }
+  const copySeedBtn = getEl("btn-copy-run-seed");
+  if (copySeedBtn) copySeedBtn.addEventListener("click", copyRunSeed);
+
   const starterGrid = getEl("starter-decks-grid");
   if (starterGrid) {
     starterGrid.addEventListener("click", (e) => {
@@ -3209,10 +4613,29 @@ function initEvents() {
         const deckById = box.dataset.starterId ? STARTER_DECKS.find(d => d.id === box.dataset.starterId) : null;
         const idx = Number(box.dataset.starterIdx);
         const chosenDeck = deckById || STARTER_DECKS[idx] || STARTER_DECKS[0];
+        if (!isStarterDeckAvailable(chosenDeck.id)) {
+          setText("starter-unlock-status", getStarterDeckProgressMessage());
+          return;
+        }
+        const challengeId = challengeSelect ? challengeSelect.value : "standard";
+        if (!RUN_CHALLENGES.some(challenge => challenge.id === challengeId)) {
+          setText("run-challenge-desc", "Select a valid challenge before starting this run.");
+          return;
+        }
+        const campaignId = campaignSelect ? campaignSelect.value : DEFAULT_CAMPAIGN_ID;
+        if (!CAMPAIGN_DEFINITIONS.some(campaign => campaign.id === campaignId)) {
+          setText("run-campaign-desc", "Select a valid campaign before starting this run.");
+          return;
+        }
+        const seed = seedInput ? seedInput.value : "";
+        if (!isValidRunSeedInput(seed)) {
+          setText("run-seed-desc", `Seeds must be ${MAX_RUN_SEED_LENGTH} characters or fewer.`);
+          return;
+        }
         newRunForceChoice = false;
         safeCloseModal(newrunDialog);
         clearRunState();
-        startNewRun(chosenDeck);
+        startNewRun(chosenDeck, challengeId, campaignId, seed);
       }
     });
   }
@@ -3380,6 +4803,48 @@ function initEvents() {
         const btn = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-motion-mode]") : null;
         if (!btn) return;
         await DesktopBridge.updateSettings({ motionMode: btn.dataset.motionMode });
+        renderDesktopSettingsModal();
+      });
+    }
+
+    const combatSpeedGroup = getEl("settings-combat-speed-group");
+    if (combatSpeedGroup) {
+      combatSpeedGroup.addEventListener("click", async (e) => {
+        const btn = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-combat-speed]") : null;
+        if (!btn) return;
+        await DesktopBridge.updateSettings({ combatSpeed: btn.dataset.combatSpeed });
+        renderDesktopSettingsModal();
+      });
+    }
+
+    const soundToggle = getEl("settings-sound-enabled");
+    if (soundToggle) {
+      soundToggle.addEventListener("change", async () => {
+        const enabled = Boolean(soundToggle.checked);
+        const unlock = enabled ? unlockSoundFromUserGesture() : Promise.resolve(true);
+        await DesktopBridge.updateSettings({ soundEnabled: enabled });
+        applySoundOutputSettings();
+        renderDesktopSettingsModal();
+        if (!enabled) {
+          setSoundStatusMessage("Sound effects are off.");
+          return;
+        }
+        if (await unlock) {
+          setSoundStatusMessage(`Sound effects are on at ${Math.round(DesktopBridge.getSettings().soundVolume * 100)}% volume.`);
+        }
+      });
+    }
+
+    const soundVolume = getEl("settings-sound-volume");
+    const soundVolumeValue = getEl("settings-sound-volume-value");
+    if (soundVolume && soundVolumeValue) {
+      soundVolume.addEventListener("input", () => {
+        soundVolumeValue.textContent = `${Math.round(Number(soundVolume.value) || 0)}%`;
+      });
+      soundVolume.addEventListener("change", async () => {
+        const nextVolume = Number(soundVolume.value) / 100;
+        await DesktopBridge.updateSettings({ soundVolume: nextVolume });
+        applySoundOutputSettings();
         renderDesktopSettingsModal();
       });
     }

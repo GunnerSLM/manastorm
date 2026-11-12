@@ -52,6 +52,15 @@ function resetTestState() {
   state.turnStats = { spells: 0, landfalls: 0, graveTriggers: 0 };
   state.encounterIdx = 0;
   state.playerLife = START_LIFE;
+  state.campaignId = DEFAULT_CAMPAIGN_ID;
+  state.runSeed = null;
+  state.rngState = null;
+  state.runId = null;
+  state.runStartedAt = null;
+  state.runHistoryRecorded = false;
+  state.runTurns = 0;
+  state.runHistoryError = null;
+  state.profileError = null;
 }
 
 // ============================================================================
@@ -148,6 +157,10 @@ state.playerCreatures = [
   const res = calculateProjectedCombat();
   assert(res.power === 6 && res.mult === 3 && res.totalDamage === 18,
     `2.1 Unblocked 2 + 4 Burn = 6 Power × 3 Mult = 18 DMG (got ${res.power}×${res.mult}=${res.totalDamage})`);
+  assert(
+    res.attackerDamageByUid.c1 === 2 && res.attackerAssignments.c1.damageToBoss === 2,
+    "2.1 Combat projection identifies unblocked attacker power by creature"
+  );
 }
 
 // Test 2.2: Trample + Deathtouch only assigns 1 lethal damage to blocker, trampling the rest!
@@ -160,7 +173,7 @@ state.enemyCreatures = [
 ];
 {
   const res = calculateProjectedCombat();
-  assert(res.power === 3 && res.deadBlockerUids.has("b_big"),
+  assert(res.power === 3 && res.deadBlockerUids.has("b_big") && res.attackerDamageByUid.c_dt === 3,
     `2.2 Deathtouch + Trample 4/4 vs 0/6 blocker should kill blocker with 1 dmg and trample 3 to boss (got power=${res.power})`);
 }
 
@@ -176,6 +189,7 @@ state.enemyCreatures = [
   const res = calculateProjectedCombat();
   assert(res.deadBlockerUids.has("b_33"), "2.3 3/2 Double Strike kills 3/3 blocker on first strike");
   assert(!res.deadAttackerCountsByUid["c_ds"], "2.3 3/2 Double Strike survives because blocker dies in first-strike step");
+  assert(res.attackerDamageByUid.c_ds === undefined, "2.3 Fully blocked attacker has no direct Boss damage contribution");
 }
 
 // Test 2.4: Flying bypasses ground blockers, blocked only by Flying blockers
@@ -217,6 +231,270 @@ state.playerCreatures = [
   const res = calculateProjectedCombat();
   // Note: 1 creature with 5+ power triggers Titanfall Tier 1 (+3 Power), so 6 + 3 = 9 Power, 0 Burn!
   assert(res.power === 9, `2.6 Vorinclex negates 9 Burn Power, leaving 6 Creature + 3 Titanfall = 9 Power (got ${res.power})`);
+  assert(
+    getEffectiveBurnPower(9, ENCOUNTERS[2]).effective === 5 &&
+    getEffectiveBurnPower(9, ENCOUNTERS[4]).effective === 0,
+    "2.6 Sheoldred halves direct Burn while Vorinclex remains immune"
+  );
+}
+
+// Test 2.7: Declarative encounter modifiers control wave counts and blockers
+resetTestState();
+{
+  state.turn = 4;
+  spawnEnemyWave(ENCOUNTERS[0]);
+  assert(
+    state.enemyCreatures.length === 2,
+    "2.7 Garruk's Stampede adds a second Beast starting on Turn 4"
+  );
+
+  state.enemyCreatures = [];
+  state.turn = 2;
+  spawnEnemyWave(ENCOUNTERS[1]);
+  assert(
+    state.enemyCreatures.length === 2,
+    "2.7 Krenko doubles Goblin spawns on even turns"
+  );
+
+  state.encounterIdx = 5;
+  state.enemyCreatures = [];
+  spawnEnemyWave(ENCOUNTERS[5]);
+  assert(
+    state.enemyCreatures.length === 2 &&
+    state.enemyCreatures.every(blocker => blocker.toughness === 5),
+    "2.7 Elesh Norn reinforces even-turn waves with two 4/5 Praetor Guards"
+  );
+
+  assert(
+    getEnemyWaveSpawnCount(ENCOUNTERS[5], 2, 4) === 1 &&
+    getEnemyWaveSpawnCount(ENCOUNTERS[5], 2, 5) === 0,
+    "2.7 Enemy wave forecasts respect the five-blocker board cap"
+  );
+}
+
+// Test 2.8: Talrand taxes the first spell only when the player has fewer than four lands
+resetTestState();
+{
+  state.encounterIdx = 3;
+  state.playerLands = [{}, {}, {}];
+  handleSpellCast({ type: "Instant" });
+  handleSpellCast({ type: "Instant" });
+  assert(
+    state.enemyCreatures.length === 1 &&
+    state.enemyCreatures[0].name === "Sky Drake Whelp" &&
+    state.enemyCreatures[0].keywords.includes("Flying"),
+    "2.8 Talrand adds one Flying Drake for the first spell each turn, not every spell"
+  );
+
+  resetTestState();
+  state.encounterIdx = 3;
+  state.playerLands = [{}, {}, {}, {}];
+  handleSpellCast({ type: "Instant" });
+  assert(
+    state.enemyCreatures.length === 0,
+    "2.8 Talrand's spell tax stops once the player controls four lands"
+  );
+}
+
+// Test 2.9: Sheoldred drain and Vorinclex's Iron Hide apply during retaliation
+resetTestState();
+{
+  state.encounterIdx = 2;
+  state.turn = 1;
+  state.maxTurns = 5;
+  state.enemyLife = 100;
+  state.enemyMaxLife = 165;
+  state.playerLife = 20;
+  executeCombatAndEndTurn();
+  assert(
+    state.enemyLife === 101 &&
+    state.playerLife === 19 &&
+    state.enemyCreatures.length === 1,
+    "2.9 Sheoldred drains 1 player Life, restores 1 Boss Life, and spawns a blocker"
+  );
+
+  resetTestState();
+  state.encounterIdx = 4;
+  state.turn = 1;
+  state.maxTurns = 5;
+  state.enemyLife = 200;
+  state.enemyMaxLife = 380;
+  state.playerLife = 20;
+  state.enemyCreatures = [
+    { uid: "iron_hydra", name: "Vorinclex Hydra", power: 4, toughness: 4, keywords: [], frozen: false }
+  ];
+  executeCombatAndEndTurn();
+  assert(
+    state.playerLife === 15,
+    "2.9 Vorinclex's surviving Hydra retaliates for 5 damage (4 power + Iron Hide)"
+  );
+}
+
+// Test 2.10: Challenge modes apply their trade-offs and reset cleanly
+resetTestState();
+{
+  assert(
+    startNewRun(STARTER_DECKS[0], "short_fuse") &&
+    state.challengeId === "short_fuse" &&
+    state.maxTurns === 4 &&
+    state.gold === 11,
+    "2.10 Short Fuse starts with four-turn wards and +$5 opening gold"
+  );
+
+  state.encounterIdx = 1;
+  beginEncounter();
+  assert(
+    state.maxTurns === 4 && state.challengeId === "short_fuse",
+    "2.10 Challenge turn limits persist when the next encounter begins"
+  );
+
+  startNewRun(STARTER_DECKS[0], "swarm_surge");
+  assert(
+    state.challengeId === "swarm_surge" &&
+    state.gold === 11 &&
+    getEnemyWaveSpawnCount(ENCOUNTERS[0], 1, 0) === 1 &&
+    getEnemyWaveSpawnCount(ENCOUNTERS[0], 2, 0) === 2,
+    "2.10 Swarm Surge adds one blocker on even-turn waves and +$5 opening gold"
+  );
+
+  startNewRun(STARTER_DECKS[0]);
+  assert(
+    state.challengeId === "standard" &&
+    state.maxTurns === 5 &&
+    state.gold === 6 &&
+    getEnemyWaveSpawnCount(ENCOUNTERS[0], 1, 0) === 1,
+    "2.10 Starting a standard run clears all prior challenge modifiers"
+  );
+
+  const challengeBeforeInvalidStart = state.challengeId;
+  assert(
+    startNewRun(STARTER_DECKS[0], "unknown_challenge") === false &&
+    state.challengeId === challengeBeforeInvalidStart,
+    "2.10 Unknown challenge IDs are rejected without mutating the active run"
+  );
+
+  assert(
+    CAMPAIGN_DEFINITIONS.length >= 2 &&
+    CAMPAIGN_DEFINITIONS.every(campaign =>
+      campaign.encounters.length === 6 &&
+      campaign.routeNodes.some(node => node.id === "p2_boss" && node.encounterIdx === 5)
+    ),
+    "2.11 Campaign definitions provide complete six-encounter routes with a final boss"
+  );
+  assert(
+    startNewRun(STARTER_DECKS[0], "standard", "riftfall") &&
+    state.campaignId === "riftfall" &&
+    getCurrentEncounter().name === "Riftling Broodmother" &&
+    getRouteNodeById("p2_boss").title === "The Void Architect",
+    "2.11 Riftfall starts with its own encounters, route flavor, and final Warden"
+  );
+  state.encounterIdx = 5;
+  state.route = {
+    loop: 0,
+    currentNodeId: "p2_boss",
+    completedNodeIds: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss", "p2_entry_fight", "p2_mid_elite"],
+    visitedNodeIds: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss", "p2_entry_fight", "p2_mid_elite", "p2_boss"],
+    pendingEventId: null,
+    pendingSelection: false,
+    lastActivitySummary: null
+  };
+  beginEncounter();
+  state.enemyLife = 0;
+  assert(
+    getCurrentEncounter().name === "The Void Architect" &&
+    handleEncounterVictory() &&
+    state.pendingDraft === null &&
+    state.route.completedNodeIds.includes("p2_boss") &&
+    state.route.pendingSelection === false,
+    "2.11 Riftfall victory recognizes its alternate final boss and ends at the terminal route node"
+  );
+  const campaignBeforeInvalidStart = state.campaignId;
+  assert(
+    startNewRun(STARTER_DECKS[0], "standard", "unknown_campaign") === false &&
+    state.campaignId === campaignBeforeInvalidStart,
+    "2.11 Unknown campaign IDs are rejected without mutating the active run"
+  );
+  startNewRun(STARTER_DECKS[0]);
+
+  const previousDocument = globalThis.document;
+  const previousHeadless = state.headless;
+  const elements = {
+    "newrun-dialog": { open: false, setAttribute() {}, showModal() { this.open = true; } },
+    "newrun-close-form": { hidden: false },
+    "newrun-title": { textContent: "" },
+    "newrun-desc": { textContent: "" },
+    "run-challenge-select": { innerHTML: "", value: "" },
+    "run-challenge-desc": { textContent: "" },
+    "run-campaign-select": { innerHTML: "", value: "" },
+    "run-campaign-desc": { textContent: "" },
+    "starter-decks-grid": { innerHTML: "" }
+  };
+  try {
+    state.challengeId = "swarm_surge";
+    state.campaignId = "riftfall";
+    state.headless = false;
+    globalThis.document = { getElementById: id => elements[id] || null };
+    openNewRunModal();
+    assert(
+      elements["run-challenge-select"].innerHTML.includes('value="short_fuse"') &&
+      elements["run-challenge-select"].innerHTML.includes('value="swarm_surge"') &&
+      elements["run-challenge-select"].value === "swarm_surge" &&
+      elements["run-challenge-desc"].textContent === getRunChallengeById("swarm_surge").description &&
+      elements["run-campaign-select"].innerHTML.includes('value="riftfall"') &&
+      elements["run-campaign-select"].value === "riftfall" &&
+      elements["run-campaign-desc"].textContent === getCampaignById("riftfall").description &&
+      elements["newrun-dialog"].open,
+      "2.11 New-run dialog lists campaigns and challenges, describes both selections, and opens"
+    );
+  } finally {
+    state.headless = previousHeadless;
+    state.campaignId = DEFAULT_CAMPAIGN_ID;
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
+}
+
+// Test 2.12: Seeded runs reproduce gameplay randomness and daily seeds use UTC dates
+resetTestState();
+{
+  const seed = "shared-riftfall-seed";
+  startNewRun(STARTER_DECKS[0], "standard", "riftfall", seed);
+  const firstLibrary = state.library.map(card => card.id);
+  const firstDraft = sampleDraftPool(new Set(STARTER_DECKS[0].colors)).map(card => card.id);
+  const firstGenerated = sampleGeneratedCreature(new Set(STARTER_DECKS[0].colors));
+  const firstSequence = Array.from({ length: 6 }, () => gameRandom());
+
+  startNewRun(STARTER_DECKS[0], "standard", "riftfall", seed);
+  const secondLibrary = state.library.map(card => card.id);
+  const secondDraft = sampleDraftPool(new Set(STARTER_DECKS[0].colors)).map(card => card.id);
+  const secondGenerated = sampleGeneratedCreature(new Set(STARTER_DECKS[0].colors));
+  const secondSequence = Array.from({ length: 6 }, () => gameRandom());
+  assert(
+    JSON.stringify(firstLibrary) === JSON.stringify(secondLibrary) &&
+    JSON.stringify(firstDraft) === JSON.stringify(secondDraft) &&
+    JSON.stringify(firstGenerated) === JSON.stringify(secondGenerated) &&
+    JSON.stringify(firstSequence) === JSON.stringify(secondSequence),
+    "2.12 Identical seeds reproduce shuffles, drafts, generated creatures, and future random draws"
+  );
+
+  startNewRun(STARTER_DECKS[0], "standard", "riftfall", "different-seed");
+  const differentSequence = Array.from({ length: 6 }, () => gameRandom());
+  assert(
+    JSON.stringify(firstSequence) !== JSON.stringify(differentSequence),
+    "2.12 Different seeds produce a divergent gameplay random sequence"
+  );
+  assert(
+    getDailyRunSeed(new Date("2025-02-02T23:30:00-05:00")) === "daily-2025-02-03" &&
+    getDailyRunSeed(new Date("2025-02-03T02:00:00Z")) === "daily-2025-02-03",
+    "2.12 Daily seeds are stable across time zones by using the UTC calendar date"
+  );
+  const activeSeed = state.runSeed;
+  assert(
+    startNewRun(STARTER_DECKS[0], "standard", "riftfall", "x".repeat(MAX_RUN_SEED_LENGTH + 1)) === false &&
+    state.runSeed === activeSeed &&
+    isValidRunSeedInput(" "),
+    "2.12 Oversized seed input is rejected without changing the current run"
+  );
 }
 
 // ============================================================================
@@ -724,6 +1002,179 @@ resetTestState();
   assert(state.resonanceSources.some(s => s.label.includes("Halo Foil")), "4.4.8 Resonance source logged for Halo Foil");
 }
 
+// --- 4.4.9 Permanent Card Evolution ---
+{
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+  state.gold = 50;
+  generateShopStock(false);
+
+  const upgradeIdx = state.shopStock.upgrades.findIndex(item => item.id === "card_evolution");
+  const veteranTarget = state.masterDeck.find(card => card.id === "llanowar_elves");
+  const trampleTarget = state.masterDeck.find(card => card.id === "lotus_cobra");
+  const originalDefinition = JSON.stringify(CARD_DB.llanowar_elves);
+  const veteran = CARD_EVOLUTION_OPTIONS.find(option => option.id === "veteran");
+  const trampler = CARD_EVOLUTION_OPTIONS.find(option => option.id === "trampler");
+
+  assert(
+    upgradeIdx >= 0 &&
+    getAvailableCardEvolutionOptions(veteranTarget).map(option => option.id).join(",") === "veteran,trampler" &&
+    getAvailableCardEvolutionOptions(cloneCard("rampaging_baloths")).map(option => option.id).join(",") === "veteran",
+    "4.4.9.1 Shop offers two meaningful evolutions and hides Trample when the Creature already has it"
+  );
+  assert(
+    completeCardEvolutionPurchase(upgradeIdx, veteranTarget.uid, "invalid") === false &&
+    completeCardEvolutionPurchase(upgradeIdx, "missing-card", "veteran") === false &&
+    state.gold === 50 &&
+    !state.shopStock.upgrades[upgradeIdx].bought,
+    "4.4.9.2 Invalid evolution choices and targets do not spend Gold or mark the offer bought"
+  );
+
+  state.gold = CARD_EVOLUTION_COST - 1;
+  assert(
+    completeCardEvolutionPurchase(upgradeIdx, veteranTarget.uid, "veteran") === false &&
+    state.gold === CARD_EVOLUTION_COST - 1 &&
+    !state.shopStock.upgrades[upgradeIdx].bought,
+    "4.4.9.3 An unaffordable evolution is rejected without changing the card or shop"
+  );
+  state.gold = 50;
+
+  const veteranPurchase = completeCardEvolutionPurchase(upgradeIdx, veteranTarget.uid, veteran.id);
+  assert(
+    veteranPurchase === true &&
+    veteranTarget.permPowerBonus === 3 &&
+    veteranTarget.permToughnessBonus === 3 &&
+    veteranTarget.evolutionId === "veteran" &&
+    veteranTarget.keywords.includes("Trample") === false &&
+    state.gold === 50 - CARD_EVOLUTION_COST &&
+    state.shopStock.upgrades[upgradeIdx].bought &&
+    getAvailableCardEvolutionOptions(veteranTarget).length === 0 &&
+    JSON.stringify(CARD_DB.llanowar_elves) === originalDefinition,
+    "4.4.9.4 Veteran's Might permanently grants +3/+3 once, charges the correct price, and leaves CARD_DB untouched"
+  );
+  const goldAfterVeteran = state.gold;
+  assert(
+    completeCardEvolutionPurchase(upgradeIdx, veteranTarget.uid, veteran.id) === false &&
+    state.gold === goldAfterVeteran,
+    "4.4.9.5 Repeating an evolved-card purchase is rejected without charging twice"
+  );
+
+  generateShopStock(false);
+  const secondUpgradeIdx = state.shopStock.upgrades.findIndex(item => item.id === "card_evolution");
+  const tramplePurchase = completeCardEvolutionPurchase(secondUpgradeIdx, trampleTarget.uid, "trampler");
+  assert(
+    tramplePurchase === true &&
+    trampleTarget.permPowerBonus === 1 &&
+    trampleTarget.permToughnessBonus === 1 &&
+    trampleTarget.keywords.includes("Trample") &&
+    trampleTarget.evolutionId === "trampler",
+    "4.4.9.6 Predator's Instinct grants its permanent stat bonus and combat keyword"
+  );
+
+  const save = createCanonicalSavePayload(true);
+  const normalized = normalizeCanonicalSave(save);
+  const restoredCard = normalized.save.masterDeck.find(card => card.id === trampleTarget.id);
+  assert(
+    normalized.valid &&
+    restoredCard.evolutionId === "trampler" &&
+    restoredCard.permPowerBonus === 1 &&
+    restoredCard.permToughnessBonus === 1 &&
+    restoredCard.keywords.includes("Trample"),
+    "4.4.9.7 Evolved card metadata and effects survive canonical save normalization"
+  );
+
+  state.masterDeck = [];
+  applyCanonicalSaveToState(normalized.save);
+  const restoredInstance = state.masterDeck.find(card => card.id === trampleTarget.id);
+  assert(
+    restoredInstance &&
+    restoredInstance.evolutionId === "trampler" &&
+    restoredInstance.permPowerBonus === 1 &&
+    restoredInstance.keywords.includes("Trample"),
+    "4.4.9.8 Restoring a run rebuilds the evolved card instance with its permanent effect"
+  );
+  beginEncounter();
+  const nextEncounterCopy = [...state.library, ...state.hand].find(card => card.uid === restoredInstance.uid);
+  assert(
+    nextEncounterCopy &&
+    nextEncounterCopy.evolutionId === "trampler" &&
+    nextEncounterCopy.keywords.includes("Trample") &&
+    nextEncounterCopy.permPowerBonus === 1,
+    "4.4.9.9 Evolved statistics and abilities carry into the next encounter"
+  );
+
+  const previousDocument = globalThis.document;
+  const previousHeadless = state.headless;
+  const previousRenderAll = globalThis.renderAll;
+  const previousRenderShop = globalThis.renderShop;
+  let selectedTarget = null;
+  const modalNodes = {
+    "target-dialog": {
+      open: false,
+      showModal() { this.open = true; },
+      close() { this.open = false; },
+      addEventListener() {}
+    },
+    "target-dialog-title": { textContent: "" },
+    "target-dialog-desc": { textContent: "" },
+    "target-dialog-grid": { innerHTML: "" }
+  };
+  try {
+    state.headless = false;
+    globalThis.document = { getElementById: id => modalNodes[id] || null };
+    openTargetPickerModal(
+      "Test evolution",
+      "Choose or cancel",
+      ["first", "second"],
+      (_item, idx) => `<button data-target-idx="${idx}"></button>`,
+      item => { selectedTarget = item; },
+      { allowCancel: true }
+    );
+    const pendingFallback = targetDialogPendingFallback;
+    handleTargetDialogClose();
+    assert(
+      pendingFallback === null && selectedTarget === null && targetDialogActive === false,
+      "4.4.9.10 Cancelling an evolution picker does not auto-select a card or spend Gold"
+    );
+
+    globalThis.renderAll = () => {};
+    globalThis.renderShop = () => {};
+    state.gold = 50;
+    generateShopStock(false);
+    const flowUpgradeIdx = state.shopStock.upgrades.findIndex(item => item.id === "card_evolution");
+    const flowTarget = getAvailableEvolutionTargets()[0];
+    buyUpgrade(flowUpgradeIdx);
+    const goldBeforeFlow = state.gold;
+    const clickChoice = idx => modalNodes["target-dialog-grid"].onclick({
+      target: {
+        closest: () => ({ dataset: { targetIdx: String(idx) } })
+      }
+    });
+    clickChoice(0);
+    handleTargetDialogClose();
+    const selectedEvolution = getAvailableCardEvolutionOptions(flowTarget)[0];
+    const beforeEvolutionChoice = state.gold;
+    clickChoice(0);
+    handleTargetDialogClose();
+    assert(
+      selectedEvolution &&
+      modalNodes["target-dialog-title"].textContent === `Evolve ${flowTarget.name}` &&
+      goldBeforeFlow === 50 &&
+      beforeEvolutionChoice === 50 &&
+      state.gold === 50 - CARD_EVOLUTION_COST &&
+      state.shopStock.upgrades[flowUpgradeIdx].bought &&
+      flowTarget.evolutionId === selectedEvolution.id,
+      "4.4.9.11 Shop UI waits for both explicit choices before applying and charging for evolution"
+    );
+  } finally {
+    state.headless = previousHeadless;
+    globalThis.renderAll = previousRenderAll;
+    globalThis.renderShop = previousRenderShop;
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
+}
+
 // --- 4.5 style.css Stylesheet Integrity and Shader Specification Verification ---
 if (typeof require !== "undefined") {
   const fs = require("fs");
@@ -1209,6 +1660,16 @@ function createMockElement(tagName, id = "", className = "") {
   };
 
   const simCtrl = createHandDragController();
+  const originalLocalPlayabilityFeedback = globalThis.showLocalPlayabilityFeedback;
+  const originalDropZoneSuccess = globalThis.showDropZoneSuccess;
+  let localPlayabilityFeedback = "";
+  const successfulDropZones = [];
+  globalThis.showLocalPlayabilityFeedback = (card, message) => {
+    localPlayabilityFeedback = `${card.uid}: ${message}`;
+  };
+  globalThis.showDropZoneSuccess = (zone) => {
+    successfulDropZones.push(zone);
+  };
 
   // 5.5.1 Valid Land Drop: pointerdown -> move -> pointerup calls playCardFromHand and plays land
   simCtrl.handlePointerDown({ target: mockLandEl, pointerId: 20, clientX: 200, clientY: 550 });
@@ -1217,6 +1678,10 @@ function createMockElement(tagName, id = "", className = "") {
   assert(
     state.playerLands.some(l => l.uid === "land-uid-1"),
     "5.5.1 Headless simulation: valid land drop plays land into state.playerLands"
+  );
+  assert(
+    successfulDropZones.at(-1) === "lands",
+    "5.5.1 Valid land drop signals its destination zone"
   );
 
   // 5.5.2 Valid Creature Drop: pointerdown -> move -> pointerup plays creature
@@ -1227,10 +1692,12 @@ function createMockElement(tagName, id = "", className = "") {
     state.playerCreatures.some(c => c.uid === "creature-uid-1"),
     "5.5.2 Headless simulation: valid creature drop plays creature into state.playerCreatures"
   );
+  assert(
+    successfulDropZones.at(-1) === "creatures",
+    "5.5.2 Valid creature drop signals its destination zone"
+  );
 
-  // 5.5.3 Invalid Drop (Unplayable Card): shows .drag-invalid and triggers spawnFx; card remains in hand
-  let fxSpawnedMsg = "";
-  globalThis.spawnFx = (msg, col) => { fxSpawnedMsg = msg; };
+  // 5.5.3 Invalid Drop (Unplayable Card): shows local playability feedback and retains card
   simCtrl.handlePointerDown({ target: mockExpensiveEl, pointerId: 22, clientX: 500, clientY: 550 });
   simCtrl.handlePointerMove({ pointerId: 22, clientX: 500, clientY: 200 }); // over table
   assert(
@@ -1239,18 +1706,20 @@ function createMockElement(tagName, id = "", className = "") {
   );
   simCtrl.handlePointerUp({ pointerId: 22, clientX: 500, clientY: 200 });
   assert(
-    fxSpawnedMsg.includes("Missing Mana Pips") && state.hand.some(c => c.uid === "expensive-spell"),
-    "5.5.3 Invalid drop triggers spawnFx message and retains card in hand"
+    localPlayabilityFeedback.includes("expensive-spell") &&
+    localPlayabilityFeedback.includes("colored mana") &&
+    state.hand.some(c => c.uid === "expensive-spell"),
+    "5.5.3 Invalid drop shows local playability feedback and retains card in hand"
   );
 
-  // 5.5.4 Missed Drop outside zone: snaps back silently without spawnFx and retains card
-  fxSpawnedMsg = "";
+  // 5.5.4 Missed Drop outside zone: snaps back silently and retains card
+  localPlayabilityFeedback = "";
   simCtrl.handlePointerDown({ target: mockExpensiveEl, pointerId: 23, clientX: 500, clientY: 550 });
   simCtrl.handlePointerMove({ pointerId: 23, clientX: 500, clientY: 530 }); // inside hand area
   simCtrl.handlePointerUp({ pointerId: 23, clientX: 500, clientY: 530 });
   assert(
-    fxSpawnedMsg === "" && state.hand.some(c => c.uid === "expensive-spell"),
-    "5.5.4 Drop outside play zone snaps back silently without spawnFx"
+    localPlayabilityFeedback === "" && state.hand.some(c => c.uid === "expensive-spell"),
+    "5.5.4 Drop outside play zone snaps back silently without feedback"
   );
 
   // 5.5.5 Abort via Escape keydown restores card and clears drag state
@@ -1280,7 +1749,8 @@ function createMockElement(tagName, id = "", className = "") {
     "5.5.7 Drag consumes subsequent click exactly once to prevent double-play"
   );
 
-  delete globalThis.spawnFx;
+  globalThis.showLocalPlayabilityFeedback = originalLocalPlayabilityFeedback;
+  globalThis.showDropZoneSuccess = originalDropZoneSuccess;
   delete globalThis.document;
 }
 
@@ -1478,6 +1948,81 @@ if (typeof require === "function") {
   assert(
     handHover.rotate && handHover.rotate.includes("0deg") && handHover.scale && handHover.scale.includes("1.15"),
     `5.7.8 Normal hand card hover straightens to 0deg and scales to 1.15 (got rot: ${handHover.rotate}, scale: ${handHover.scale})`
+  );
+
+  assert(
+    css.includes(".fx-play-impact-creature") &&
+    css.includes(".fx-play-impact-land") &&
+    css.includes(".fx-play-impact-spell") &&
+    css.includes(".drop-success-land.reduced-motion") &&
+    css.includes(".hand-card.play-invalid-feedback.reduced-motion"),
+    "5.7.9 Card-play impacts, destination cues, and invalid feedback have reduced-motion styles"
+  );
+
+  assert(
+    css.includes(".life-bar-wrap.boss-life-impact") &&
+    css.includes(".life-bar-wrap.boss-life-lethal") &&
+    css.includes("dialog.boss-victory-transition[open]") &&
+    css.includes("boss-life-impact-duration") &&
+    css.includes("boss-victory-transition-duration"),
+    "5.7.10 Combat impacts and lethal victory transitions have timed boss-bar and dialog styles"
+  );
+
+  assert(
+    css.includes(".projection-feedback") &&
+    css.includes(".board-card.projection-feedback-pulse") &&
+    css.includes("#calc-total.projection-feedback-pulse") &&
+    uiJs.includes("function highlightCombatContributors") &&
+    uiJs.includes("data-synergy-id=\"${x.id}\""),
+    "5.7.11 Attacker projections and combat sources have visible highlight hooks"
+  );
+
+  assert(
+    css.includes("@keyframes bossAmbientGlow") &&
+    css.includes("@keyframes arenaAmbientDrift") &&
+    css.includes("@keyframes relicAmbientTint") &&
+    css.includes("body.page-hidden .battlefield-main::before") &&
+    uiJs.includes("document.addEventListener(\"visibilitychange\"") &&
+    uiJs.includes("--encounter-tint"),
+    "5.7.12 Plane-tinted ambient motion pauses while the page is hidden"
+  );
+
+  assert(
+    css.includes("@keyframes resourceValueChange") &&
+    css.includes("@keyframes rewardCardEnter") &&
+    css.includes("@keyframes routeSceneEnter") &&
+    css.includes("dialog.route-selection-pending[open]") &&
+    uiJs.includes("function setResourceText") &&
+    uiJs.includes("function showShopRewardSummary") &&
+    uiJs.includes("selectRouteNodeWithTransition"),
+    "5.7.13 Resource counts, rewards, and route changes have focused transition feedback"
+  );
+
+  const desktopJs = fs.readFileSync(path.join(__dirname, "desktop.js"), "utf8");
+  const indexHtml = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+  assert(
+    desktopJs.includes("soundEnabled: false") &&
+      desktopJs.includes("soundVolume: 0.3") &&
+      uiJs.includes("function unlockSoundFromUserGesture") &&
+      uiJs.includes("if (!settings.soundEnabled || settings.soundVolume <= 0)") &&
+      ["cardPlay", "manaTap", "impact", "victory"].every(cue => uiJs.includes(`${cue}:`)) &&
+      indexHtml.includes('id="settings-sound-enabled"') &&
+      indexHtml.includes('id="settings-sound-volume"') &&
+      indexHtml.includes('id="settings-sound-status"'),
+    "5.7.14 Optional sound is muted by default, gesture-gated, adjustable, and status-reported"
+  );
+
+  assert(
+    css.includes(".creature-card.creature-grounded-thump") &&
+      css.includes(".mana-row-ripple") &&
+      css.includes(".mana-pool-box.mana-shortage-pulse") &&
+      css.includes(".land-drop-status.land-limit-pulse") &&
+      uiJs.includes("creature-grounded-thump") &&
+      uiJs.includes("mana-row-ripple") &&
+      uiJs.includes("mana-shortage-pulse") &&
+      uiJs.includes("land-limit-pulse") &&
+      uiJs.includes("setResourceText(\"enemy-life-text\""),
+    "5.7.15 Card play landing reactions, local playability pulses, and boss life settle are wired"
   );
 }
 
@@ -1794,7 +2339,7 @@ function createMemoryStorage(initial = {}) {
 
     for (let cycle = 0; cycle < 25; cycle++) {
       const deckChoice = STARTER_DECKS[cycle % STARTER_DECKS.length];
-      startNewRun(deckChoice);
+      startNewRun(deckChoice, "standard", DEFAULT_CAMPAIGN_ID, null, { allowLockedDeck: true });
       state.encounterIdx = Math.floor(rand() * ENCOUNTERS.length);
       state.playerLife = 1 + Math.floor(rand() * MAX_LIFE);
       state.gold = Math.floor(rand() * 50);
@@ -1872,8 +2417,10 @@ function createMemoryStorage(initial = {}) {
 
   const deckIds = STARTER_DECKS.map(d => d.id);
   assert(
-    deckIds.includes("golgari_graveyard") && deckIds.includes("artifact_constructs"),
-    "7.1.2 STARTER_DECKS includes 'golgari_graveyard' and 'artifact_constructs'"
+    deckIds.includes("golgari_graveyard") &&
+    deckIds.includes("artifact_constructs") &&
+    deckIds.includes("simic_tidecallers"),
+    "7.1.2 STARTER_DECKS includes graveyard, artifact, and unlockable Simic decks"
   );
 
   STARTER_DECKS.forEach(deck => {
@@ -1913,8 +2460,9 @@ function createMemoryStorage(initial = {}) {
 
   const initialAvailable = getAvailableStarterDecks();
   assert(
-    initialAvailable.length === STARTER_DECKS.length,
-    "7.2.2 All starter decks are available by default"
+    initialAvailable.length === STARTER_DECKS.length - 1 &&
+    !initialAvailable.some(deck => deck.id === "simic_tidecallers"),
+    "7.2.2 The campaign-clear deck remains locked while all original decks stay available"
   );
 
   // Temporarily lock a deck via UNLOCKED_STARTER_DECK_IDS and verify STARTER_DECKS remains intact and testable
@@ -1926,19 +2474,126 @@ function createMemoryStorage(initial = {}) {
       "7.2.3 isStarterDeckAvailable reflects UNLOCKED_STARTER_DECK_IDS state"
     );
     assert(
-      getAvailableStarterDecks().length === STARTER_DECKS.length - 1 &&
-      STARTER_DECKS.some(d => d.id === "artifact_constructs"),
+      getAvailableStarterDecks().length === STARTER_DECKS.length - 2 &&
+      STARTER_DECKS.some(d => d.id === "artifact_constructs") &&
+      !getAvailableStarterDecks().some(deck => deck.id === "simic_tidecallers"),
       "7.2.4 Locking a deck filters getAvailableStarterDecks() while keeping STARTER_DECKS definition testable"
     );
 
     const artifactDeck = STARTER_DECKS.find(d => d.id === "artifact_constructs");
-    startNewRun(artifactDeck);
+    startNewRun(artifactDeck, "standard", DEFAULT_CAMPAIGN_ID, null, { allowLockedDeck: true });
     assert(
       state.deckArchetype.id === "artifact_constructs" && state.masterDeck.length === 40,
       "7.2.5 Locked starter deck can still be directly instantiated in startNewRun for testing"
     );
   } finally {
     UNLOCKED_STARTER_DECK_IDS.add("artifact_constructs");
+  }
+}
+
+// --- 7.2.6 Persistent Starter Deck Unlock Profile ---
+{
+  const prevLS = globalThis.localStorage;
+  const memStore = createMemoryStorage();
+  try {
+    resetTestState();
+    state.masterDeck = [];
+    state.deckArchetype = STARTER_DECKS[0];
+    globalThis.localStorage = memStore;
+    const initialProfile = readGameProfile();
+    const lockedDeck = STARTER_DECKS.find(deck => deck.id === "simic_tidecallers");
+    assert(
+      initialProfile.ok &&
+      initialProfile.exists === false &&
+      !isStarterDeckAvailable(lockedDeck.id) &&
+      getStarterDeckProgressMessage().includes("0/1"),
+      "7.2.6 Fresh profile keeps the Simic deck locked and reports milestone progress"
+    );
+    assert(
+      startNewRun(lockedDeck) === false &&
+      state.masterDeck.length === 0,
+      "7.2.7 Normal run start rejects a locked deck"
+    );
+
+    state.runId = "profile-campaign-clear-1";
+    const firstClear = recordCampaignClear();
+    const savedProfile = readGameProfile();
+    assert(
+      firstClear.ok &&
+      firstClear.newlyUnlockedDeckId === lockedDeck.id &&
+      savedProfile.ok &&
+      savedProfile.profile.campaignClears === 1 &&
+      savedProfile.profile.unlockedStarterDeckIds.includes(lockedDeck.id) &&
+      isStarterDeckAvailable(lockedDeck.id),
+      "7.2.8 Campaign clear persistently unlocks the Simic starter deck"
+    );
+
+    const duplicateClear = recordCampaignClear();
+    assert(
+      duplicateClear.ok &&
+      duplicateClear.duplicate &&
+      readGameProfile().profile.campaignClears === 1,
+      "7.2.9 Re-recording the same run does not grant duplicate progress"
+    );
+    assert(
+      startNewRun(lockedDeck) &&
+      state.deckArchetype.id === lockedDeck.id &&
+      state.masterDeck.length === 40,
+      "7.2.10 A newly unlocked deck can start a normal run"
+    );
+
+    const legacyProfile = {
+      version: 0,
+      unlockedDeckIds: ["gruul"],
+      campaignWins: 1
+    };
+    memStore.setItem(GAME_PROFILE_KEY, JSON.stringify(legacyProfile));
+    const migratedProfile = readGameProfile();
+    const persistedMigration = JSON.parse(memStore.getItem(GAME_PROFILE_KEY));
+    assert(
+      migratedProfile.ok &&
+      migratedProfile.migrated === true &&
+      persistedMigration.version === GAME_PROFILE_VERSION &&
+      migratedProfile.profile.unlockedStarterDeckIds.includes(lockedDeck.id),
+      "7.2.11 Supported older profile data migrates to the current schema"
+    );
+
+    const malformedProfile = "{broken";
+    memStore.setItem(GAME_PROFILE_KEY, malformedProfile);
+    const corruptProfile = readGameProfile();
+    const corruptClear = recordCampaignClear("profile-corrupt-run");
+    assert(
+      !corruptProfile.ok &&
+      !corruptClear.ok &&
+      memStore.getItem(GAME_PROFILE_KEY) === malformedProfile &&
+      state.profileError.includes("corrupt"),
+      "7.2.12 Corrupt profile data is reported and preserved without granting unlocks"
+    );
+
+    const unsupportedProfile = JSON.stringify({ version: 99 });
+    memStore.setItem(GAME_PROFILE_KEY, unsupportedProfile);
+    const futureProfile = readGameProfile();
+    assert(
+      !futureProfile.ok &&
+      memStore.getItem(GAME_PROFILE_KEY) === unsupportedProfile,
+      "7.2.13 Unsupported profile versions are rejected without overwriting data"
+    );
+
+    globalThis.localStorage = {
+      getItem: () => null,
+      setItem: () => { throw new Error("quota exceeded"); }
+    };
+    state.runId = "profile-write-failure-run";
+    const failedWrite = recordCampaignClear();
+    assert(
+      !failedWrite.ok &&
+      state.profileError.includes("quota exceeded") &&
+      !isStarterDeckAvailable(lockedDeck.id),
+      "7.2.14 Profile write failures are surfaced and do not grant the locked deck"
+    );
+  } finally {
+    if (prevLS === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevLS;
   }
 }
 
@@ -2021,6 +2676,142 @@ function createMemoryStorage(initial = {}) {
   assert(
     spiders && spiders.count === 4 && spiders.power === 2 && spiders.keywords.includes("Lifelink") && spiders.keywords.includes("Haste"),
     `7.3.5 Spider Spawning creates 4x 2/2 Haste Lifelink Spider tokens for 4 Graveyard Creatures (got count=${spiders ? spiders.count : 0})`
+  );
+}
+
+// --- 7.3.6 New Card Mechanics ---
+{
+  const newCardIds = [
+    "mosswake_forager",
+    "briarback_colossus",
+    "emberline_daredevil",
+    "furnace_arc",
+    "tideglass_sentry",
+    "slipstream_reversal",
+    "ashen_bargain",
+    "dawnbell_acolyte",
+    "sunlit_rally",
+    "floodplain_cartographer"
+  ];
+  assert(
+    newCardIds.every(id => CARD_DB[id] && CARD_DB[id].id === id),
+    "7.3.6.1 All ten new card definitions are registered in CARD_DB"
+  );
+
+  resetTestState();
+  state.hand = [];
+  state.library = [cloneCard("forest"), cloneCard("overgrown_tomb"), cloneCard("island")];
+  handleCreatureCast(cloneCard("mosswake_forager"));
+  assert(
+    state.hand.length === 1 &&
+    state.hand[0].id === "overgrown_tomb" &&
+    state.graveyard.length === 1 &&
+    state.graveyard[0].id === "island" &&
+    state.turnResonance === 2,
+    "7.3.6.2 Mosswake Forager mills two, recovers a dual land, and gains +1 Resonance"
+  );
+
+  resetTestState();
+  handleCreatureCast(cloneCard("briarback_colossus"));
+  triggerLandfall();
+  const briarback = state.playerCreatures.find(creature => creature.id === "briarback_colossus");
+  assert(
+    briarback && briarback.tempPower === 2 && briarback.tempToughness === 2,
+    "7.3.6.3 Briarback Colossus gets +2/+2 from Landfall"
+  );
+
+  resetTestState();
+  handleCreatureCast(cloneCard("emberline_daredevil"));
+  handleSpellCast({ id: "test_instant", name: "Test Instant", type: "Instant" });
+  const daredevil = state.playerCreatures.find(creature => creature.id === "emberline_daredevil");
+  assert(
+    daredevil && daredevil.tempPower === 2 && daredevil.tempToughness === 2 && state.turnResonance === 2,
+    "7.3.6.4 Emberline Daredevil's Prowess triggers when an Instant is cast"
+  );
+
+  resetTestState();
+  handleSpellCast(cloneCard("furnace_arc"));
+  assert(
+    state.turnBurnPower === 3 && state.turnResonance === 2,
+    "7.3.6.5 Furnace Arc adds 3 Burn and +1 Resonance"
+  );
+
+  resetTestState();
+  state.hand = [];
+  state.library = [cloneCard("forest")];
+  state.enemyCreatures = [
+    { uid: "weak-blocker", name: "Weak Blocker", power: 1, toughness: 2, color: "G", keywords: [], frozen: false },
+    { uid: "strong-blocker", name: "Strong Blocker", power: 4, toughness: 4, color: "U", keywords: [], frozen: false }
+  ];
+  handleCreatureCast(cloneCard("tideglass_sentry"));
+  assert(
+    state.enemyCreatures.find(blocker => blocker.uid === "strong-blocker").frozen &&
+    !state.enemyCreatures.find(blocker => blocker.uid === "weak-blocker").frozen &&
+    state.hand.length === 1,
+    "7.3.6.6 Tideglass Sentry freezes the strongest blocker and draws one card"
+  );
+
+  resetTestState();
+  state.enemyCreatures = [
+    { uid: "weak-blocker", name: "Weak Blocker", power: 1, toughness: 2, color: "G", keywords: [], frozen: false },
+    { uid: "strong-blocker", name: "Strong Blocker", power: 4, toughness: 4, color: "U", keywords: [], frozen: false }
+  ];
+  handleSpellCast(cloneCard("slipstream_reversal"));
+  assert(
+    state.enemyCreatures.length === 1 &&
+    state.enemyCreatures[0].uid === "weak-blocker" &&
+    state.turnResonance === 3,
+    "7.3.6.7 Slipstream Reversal returns the strongest blocker and gains +2 Resonance"
+  );
+
+  resetTestState();
+  state.playerLife = 2;
+  state.manaPool.B = 1;
+  const bargain = cloneCard("ashen_bargain");
+  state.hand = [bargain];
+  state.library = [cloneCard("forest"), cloneCard("swamp")];
+  assert(
+    !canPlayCard(bargain) &&
+    getCardPlayabilityInfo(bargain).reason.includes("at least 3 Life"),
+    "7.3.6.8 Ashen Bargain cannot be cast without enough Life to pay its cost"
+  );
+  state.playerLife = 3;
+  assert(canPlayCard(bargain), "7.3.6.9 Ashen Bargain is playable when its Life cost can be paid");
+  playCardFromHand(bargain.uid);
+  assert(
+    state.playerLife === 1 &&
+    state.hand.length === 2 &&
+    state.library.length === 0 &&
+    state.turnResonance === 2,
+    "7.3.6.10 Ashen Bargain pays 2 Life, draws two cards, and gains +1 Resonance"
+  );
+
+  resetTestState();
+  state.playerLife = 15;
+  handleCreatureCast(cloneCard("dawnbell_acolyte"));
+  assert(
+    state.playerLife === 17 && state.turnResonance === 2,
+    "7.3.6.11 Dawnbell Acolyte heals 2 Life and gains +1 Resonance on ETB"
+  );
+
+  resetTestState();
+  handleSpellCast(cloneCard("sunlit_rally"));
+  const soldiers = state.playerCreatures.find(creature => creature.name === "Soldier Token");
+  assert(
+    soldiers && soldiers.count === 2 && soldiers.keywords.includes("Haste") && state.turnResonance === 2,
+    "7.3.6.12 Sunlit Rally creates two Haste Soldiers and gains +1 Resonance"
+  );
+
+  resetTestState();
+  state.hand = [];
+  state.library = [cloneCard("forest"), cloneCard("island")];
+  handleCreatureCast(cloneCard("floodplain_cartographer"));
+  triggerLandfall();
+  triggerLandfall();
+  const cartographer = state.playerCreatures.find(creature => creature.id === "floodplain_cartographer");
+  assert(
+    cartographer && cartographer.tempPower === 2 && cartographer.tempToughness === 2 && state.hand.length === 2,
+    "7.3.6.13 Floodplain Cartographer gains +1/+1 and draws a card for each Landfall"
   );
 }
 
@@ -2165,6 +2956,33 @@ console.log("\n=== SECTION 8: BRANCHING ENCOUNTER MAP (PART 2) ===");
     terminalNodes.length === 1 && terminalNodes[0].id === "p2_boss",
     "8.1.4 All paths in CAMPAIGN_ROUTE_NODES converge at the Plane 2 final boss (p2_boss)"
   );
+
+  const allCampaignGraphsValid = CAMPAIGN_DEFINITIONS.every(campaign => {
+    const nodes = campaign.routeNodes;
+    const byId = new Map(nodes.map(node => [node.id, node]));
+    const seen = new Set();
+    const pending = nodes.length ? [nodes[0].id] : [];
+    while (pending.length) {
+      const id = pending.shift();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const node = byId.get(id);
+      if (!node) return false;
+      for (const nextId of node.next || []) {
+        if (!byId.has(nextId) || byId.get(nextId).step <= node.step) return false;
+        pending.push(nextId);
+      }
+    }
+    const terminals = nodes.filter(node => !node.next || node.next.length === 0);
+    return seen.size === nodes.length &&
+      terminals.length === 1 &&
+      terminals[0].type === "boss" &&
+      terminals[0].encounterIdx === campaign.encounters.length - 1;
+  });
+  assert(
+    allCampaignGraphsValid,
+    "8.1.5 Every campaign has a reachable route graph that converges on its final boss"
+  );
 }
 
 // --- 8.2 Invalid Choices Rejected & Completing a Node Exactly Once ---
@@ -2183,12 +3001,21 @@ console.log("\n=== SECTION 8: BRANCHING ENCOUNTER MAP (PART 2) ===");
     "8.2.2 Cannot select a connected next node before the current node is completed"
   );
 
+  const misplacedNodeResult = resolveNonCombatRouteNode(getRouteNodeById("p1_upper_rest"));
+  assert(
+    misplacedNodeResult.ok === false &&
+    misplacedNodeResult.reason === "not_current" &&
+    state.gold === 6 &&
+    state.route.completedNodeIds.length === 0,
+    "8.2.3 Non-combat rewards cannot be applied for a node that is not the current route stop"
+  );
+
   // Completing current node works exactly once
   const firstComplete = completeCurrentRouteNode();
   const secondComplete = completeCurrentRouteNode();
   assert(
     firstComplete === true && secondComplete === false && state.route.completedNodeIds.length === 1,
-    "8.2.3 completeCurrentRouteNode marks the current node completed exactly once"
+    "8.2.4 completeCurrentRouteNode marks the current node completed exactly once"
   );
 
   // Invalid choices rejected: unknown ID, already-completed node, or non-connected future node
@@ -2198,7 +3025,7 @@ console.log("\n=== SECTION 8: BRANCHING ENCOUNTER MAP (PART 2) ===");
     canSelectRouteNode("p1_boss") === false &&
     canSelectRouteNode("p2_entry_shop") === false &&
     selectRouteNode("p1_boss") === false,
-    "8.2.4 Rejects invalid route choices (unknown ID, already completed node, or non-adjacent node)"
+    "8.2.5 Rejects invalid route choices (unknown ID, already completed node, or non-adjacent node)"
   );
 
   // Valid choices from p1_start are p1_upper_rest and p1_lower_event
@@ -2207,7 +3034,7 @@ console.log("\n=== SECTION 8: BRANCHING ENCOUNTER MAP (PART 2) ===");
     nextFromStart.length === 2 &&
     nextFromStart.includes("p1_upper_rest") &&
     nextFromStart.includes("p1_lower_event"),
-    "8.2.5 Completing p1_start unlocks both p1_upper_rest and p1_lower_event branches"
+    "8.2.6 Completing p1_start unlocks both p1_upper_rest and p1_lower_event branches"
   );
 }
 
@@ -2271,15 +3098,78 @@ console.log("\n=== SECTION 8: BRANCHING ENCOUNTER MAP (PART 2) ===");
   startNewRun(STARTER_DECKS[0]);
   state.playerLife = 15;
   const goldBeforeEvent = state.gold;
-  const scrollsBeforeEvent = state.consumables.length;
   completeCurrentRouteNode();
   const choseEvent = selectRouteNode("p1_lower_event");
   assert(
     choseEvent === true &&
-    state.playerLife === 18 &&
-    state.gold === goldBeforeEvent + 7 &&
-    state.consumables.length === scrollsBeforeEvent + 1,
-    "8.3.6 Selecting p1_lower_event (Event) grants +$7 Gold, +3 Life, and 1 Arcane Scroll"
+    state.playerLife === 15 &&
+    state.gold === goldBeforeEvent &&
+    state.route.pendingEventId === "p1_lower_event" &&
+    !state.route.completedNodeIds.includes("p1_lower_event"),
+    "8.3.6 Selecting p1_lower_event opens its choices without applying an automatic reward"
+  );
+  assert(
+    getRouteEventChoiceStatus("blood_tithe").available &&
+    getRouteEventChoiceStatus("purify").available &&
+    getRouteEventChoiceStatus("leave").available,
+    "8.3.7 The shrine exposes each eligible choice"
+  );
+  const bloodTithe = resolveRouteEventChoice("p1_lower_event", "blood_tithe");
+  assert(
+    bloodTithe.ok &&
+    state.playerLife === 10 &&
+    state.gold === goldBeforeEvent + 8 &&
+    state.route.pendingEventId === null &&
+    state.route.completedNodeIds.includes("p1_lower_event"),
+    "8.3.8 Paying 5 Life grants $8 Gold and completes the event"
+  );
+  const duplicateTithe = resolveRouteEventChoice("p1_lower_event", "blood_tithe");
+  assert(
+    duplicateTithe.ok === false &&
+    state.playerLife === 10 &&
+    state.gold === goldBeforeEvent + 8,
+    "8.3.9 Resolving the same event twice cannot repeat its reward"
+  );
+
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+  state.playerLife = 5;
+  state.gold = 4;
+  completeCurrentRouteNode();
+  selectRouteNode("p1_lower_event");
+  assert(
+    getRouteEventChoiceStatus("blood_tithe").available === false &&
+    getRouteEventChoiceStatus("purify").available === false &&
+    getRouteEventChoiceStatus("leave").available,
+    "8.3.10 Low Life and insufficient Gold disable the paid choices with eligibility reasons"
+  );
+  const leaveShrine = resolveRouteEventChoice("p1_lower_event", "leave");
+  assert(
+    leaveShrine.ok &&
+    state.playerLife === 5 &&
+    state.gold === 4 &&
+    state.route.completedNodeIds.includes("p1_lower_event"),
+    "8.3.11 Leaving the shrine completes it without changing resources"
+  );
+
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+  state.playerLife = MAX_LIFE - 3;
+  state.gold = 5;
+  completeCurrentRouteNode();
+  selectRouteNode("p1_lower_event");
+  const lifeBeforePurify = state.playerLife;
+  const purifyShrine = resolveRouteEventChoice("p1_lower_event", "purify");
+  assert(
+    purifyShrine.ok &&
+    state.playerLife === MAX_LIFE &&
+    state.gold === 0 &&
+    state.playerLife - lifeBeforePurify === 3,
+    "8.3.12 Spending $5 restores up to 8 Life without exceeding maximum Life"
+  );
+  assert(
+    getRouteEventChoiceStatus("purify").available === false,
+    "8.3.13 The healing choice is unavailable at maximum Life"
   );
 }
 
@@ -2296,8 +3186,38 @@ console.log("\n=== SECTION 8: BRANCHING ENCOUNTER MAP (PART 2) ===");
     globalThis.localStorage = memStore;
 
     startNewRun(STARTER_DECKS[0]);
+    state.playerLife = 15;
+    completeCurrentRouteNode();
+    selectRouteNode("p1_lower_event");
+    const pendingEventSnapshot = createFullRunSnapshot();
+    const pendingEventSaved = saveRunState(false);
+
+    state.route = createInitialRouteState(0);
+    restoreFullRunSnapshot(pendingEventSnapshot);
+    const snapshotRestoredPendingEvent =
+      state.route.pendingEventId === "p1_lower_event" &&
+      !state.route.completedNodeIds.includes("p1_lower_event");
+
+    state.route = createInitialRouteState(0);
+    state.encounterIdx = 0;
+    const pendingEventLoaded = loadRunState();
+    const pendingEventStatus = getRouteEventChoiceStatus("blood_tithe");
+    const resolvedAfterLoad = resolveRouteEventChoice("p1_lower_event", "blood_tithe");
+    assert(
+      pendingEventSaved &&
+      snapshotRestoredPendingEvent &&
+      pendingEventLoaded &&
+      pendingEventStatus.available &&
+      resolvedAfterLoad.ok &&
+      state.playerLife === 10 &&
+      state.gold === 14,
+      "8.4.1 Pending event identity restores from both snapshots and disk without duplicating effects"
+    );
+
+    startNewRun(STARTER_DECKS[0]);
     completeCurrentRouteNode(); // complete p1_start
-    selectRouteNode("p1_lower_event"); // complete p1_lower_event
+    selectRouteNode("p1_lower_event");
+    resolveRouteEventChoice("p1_lower_event", "leave");
     selectRouteNode("p1_elite"); // enter Krenko fight
     completeCurrentRouteNode(); // complete Krenko
     selectRouteNode("p1_boss"); // enter Sheoldred fight
@@ -2306,7 +3226,7 @@ console.log("\n=== SECTION 8: BRANCHING ENCOUNTER MAP (PART 2) ===");
 
     const fullSnap = createFullRunSnapshot();
     const savedOk = saveRunState(true);
-    assert(savedOk === true, "8.4.1 saveRunState persists run with active branching route state");
+    assert(savedOk === true, "8.4.2 saveRunState persists run with active branching route state");
 
     // Mutate route state to verify both restoreFullRunSnapshot and loadRunState restore exact route choices
     state.route = createInitialRouteState(0);
@@ -2316,7 +3236,7 @@ console.log("\n=== SECTION 8: BRANCHING ENCOUNTER MAP (PART 2) ===");
       state.route.completedNodeIds.includes("p1_lower_event") &&
       !state.route.completedNodeIds.includes("p1_upper_rest") &&
       state.route.pendingSelection === true,
-      "8.4.2 restoreFullRunSnapshot restores exact currentNodeId, completedNodeIds, and pendingSelection"
+      "8.4.3 restoreFullRunSnapshot restores exact currentNodeId, completedNodeIds, and pendingSelection"
     );
 
     // Scramble route again and restore from localStorage via loadRunState
@@ -2332,7 +3252,23 @@ console.log("\n=== SECTION 8: BRANCHING ENCOUNTER MAP (PART 2) ===");
       availableAfterRestore.length === 2 &&
       availableAfterRestore.includes("p2_entry_fight") &&
       availableAfterRestore.includes("p2_entry_shop"),
-      "8.4.3 loadRunState restores saved route history and exact available next choices (p2_entry_fight, p2_entry_shop)"
+      "8.4.4 loadRunState restores saved route history and exact available next choices (p2_entry_fight, p2_entry_shop)"
+    );
+
+    const repairedRoute = normalizeRouteState({
+      loop: 9,
+      currentNodeId: "p2_boss",
+      completedNodeIds: [],
+      visitedNodeIds: ["p1_start", "p2_boss"],
+      pendingSelection: true
+    }, 0, false);
+    assert(
+      repairedRoute.loop === 0 &&
+      repairedRoute.currentNodeId === "p1_start" &&
+      repairedRoute.completedNodeIds.length === 0 &&
+      repairedRoute.visitedNodeIds.length === 1 &&
+      repairedRoute.pendingSelection === false,
+      "8.4.5 Normalization repairs impossible route histories and derives the loop from encounter progress"
     );
   } finally {
     state.headless = prevHeadless;
@@ -2436,11 +3372,41 @@ console.log(`\n=== SECTION 9: POST-BATTLE CARD DRAFT & SAVE RESTORATION ===`);
     "9.1.8 Deterministic RNG produces identical repeatable draft pool choices"
   );
 
-  // 9.1.9: Edge case: count > pool size returns all available cards safely without error
+  const generatedA = sampleGeneratedCreature(gruulCols, 123456);
+  const generatedB = sampleGeneratedCreature(gruulCols, 123456);
+  assert(
+    generatedA && JSON.stringify(generatedA) === JSON.stringify(generatedB) &&
+    generatedA.type === "Creature" &&
+    generatedA.power >= 1 && generatedA.toughness >= 1 &&
+    generatedA.keywords.length === 1 &&
+    isCardLegalForDeck(generatedA, gruulCols) &&
+    normalizeGeneratedCardDefinition(generatedA)?.id === generatedA.id,
+    "9.1.9 Seeded generated creatures are deterministic, legal, bounded, and validate from their blueprint"
+  );
+  assert(
+    resolveDraftCard(generatedA)?.id === generatedA.id &&
+    resolveDraftCard({ id: generatedA.id, generatedDefinition: generatedA })?.id === generatedA.id &&
+    resolveDraftCard("lightning_bolt")?.id === "lightning_bolt",
+    "9.1.10 Draft UI resolves generated, persisted generated, and catalog card choices"
+  );
+  assert(
+    sampleGeneratedCreature(new Set(), 123456) === null &&
+    normalizeGeneratedCardDefinition({ ...generatedA, power: 99 }) === null,
+    "9.1.11 Generated creature creation rejects empty colors and validation rejects modified definitions"
+  );
+  assert(
+    STARTER_DECKS.every((deck, idx) => {
+      const card = sampleGeneratedCreature(deck.colors, 9000 + idx);
+      return card && isCardLegalForDeck(card, deck.colors);
+    }),
+    "9.1.12 Generated creature rewards are available and legal for every starter deck, including colorless"
+  );
+
+  // Edge case: count > pool size returns all available cards safely without error
   const tinyPool = sampleDraftPool(colorlessCols, 100);
   assert(
     Array.isArray(tinyPool) && tinyPool.length > 0 && tinyPool.length < 100,
-    "9.1.9 sampleDraftPool handles count exceeding pool size safely without crashing"
+    "9.1.13 sampleDraftPool handles count exceeding pool size safely without crashing"
   );
 }
 
@@ -2465,18 +3431,37 @@ console.log(`\n=== SECTION 9: POST-BATTLE CARD DRAFT & SAVE RESTORATION ===`);
     "9.2.1 Defeating non-final encounter sets state.pendingDraft with 3 choices, resolved: false"
   );
 
+  const goldAfterVictory = state.gold;
+  const lifeAfterVictory = state.playerLife;
+  const pendingDraftAfterVictory = state.pendingDraft;
+  assert(
+    handleEncounterVictory() === false &&
+    state.gold === goldAfterVictory &&
+    state.playerLife === lifeAfterVictory &&
+    state.pendingDraft === pendingDraftAfterVictory,
+    "9.2.2 Repeated victory callbacks do not grant duplicate rewards or generate another draft"
+  );
+
   // beginEncounter resets pendingDraft
   beginEncounter();
-  assert(state.pendingDraft === null, "9.2.2 beginEncounter resets state.pendingDraft to null");
+  assert(state.pendingDraft === null, "9.2.3 beginEncounter resets state.pendingDraft to null");
 
   // Final campaign encounter (encounter 5, Elesh Norn): bypasses draft completely
   state.encounterIdx = ENCOUNTERS.length - 1;
+  state.route = {
+    loop: 0,
+    currentNodeId: "p2_boss",
+    completedNodeIds: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss", "p2_entry_fight", "p2_mid_elite"],
+    visitedNodeIds: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss", "p2_entry_fight", "p2_mid_elite", "p2_boss"],
+    pendingSelection: false,
+    lastActivitySummary: null
+  };
   state.enemyLife = 0;
-  handleEncounterVictory();
+  const finalVictoryResolved = handleEncounterVictory();
 
   assert(
-    state.pendingDraft === null,
-    "9.2.3 Defeating final campaign encounter (Elesh Norn) bypasses draft generation (pendingDraft === null)"
+    finalVictoryResolved === true && state.pendingDraft === null,
+    "9.2.4 Defeating final campaign encounter (Elesh Norn) bypasses draft generation (pendingDraft === null)"
   );
 }
 
@@ -2533,6 +3518,14 @@ console.log(`\n=== SECTION 9: POST-BATTLE CARD DRAFT & SAVE RESTORATION ===`);
   resetTestState();
   startNewRun(STARTER_DECKS[0]);
   state.encounterIdx = 1;
+  state.route = {
+    loop: 0,
+    currentNodeId: "p1_elite",
+    completedNodeIds: ["p1_start", "p1_upper_rest"],
+    visitedNodeIds: ["p1_start", "p1_upper_rest", "p1_elite"],
+    pendingSelection: false,
+    lastActivitySummary: null
+  };
   state.enemyLife = 0;
   handleEncounterVictory();
 
@@ -2576,7 +3569,7 @@ console.log(`\n=== SECTION 9: POST-BATTLE CARD DRAFT & SAVE RESTORATION ===`);
 
   try {
     resetTestState();
-    startNewRun(STARTER_DECKS[0]);
+    startNewRun(STARTER_DECKS[0], "short_fuse", "riftfall", "riftfall-draft-seed");
     state.headless = false;
     globalThis.document = {};
     globalThis.localStorage = memStore;
@@ -2584,48 +3577,202 @@ console.log(`\n=== SECTION 9: POST-BATTLE CARD DRAFT & SAVE RESTORATION ===`);
     state.enemyLife = 0;
     handleEncounterVictory();
 
-    const originalChoices = [...state.pendingDraft.choices];
+    const originalChoices = state.pendingDraft.choices.map(item => typeof item === "string" ? item : item.id);
     assert(originalChoices.length === 3, "9.5.1 Pending draft generated before save");
 
     // Save while draft is pending
+    const originalRunId = state.runId;
+    state.runTurns = 7;
     const savedPending = saveRunState(false);
+    const expectedFutureRandoms = Array.from({ length: 5 }, () => gameRandom());
     assert(savedPending === true, "9.5.2 saveRunState successfully persists state with active pendingDraft");
 
     // Clear state in-memory and reload from localStorage
     state.pendingDraft = null;
     state.masterDeck = [];
     const loadSuccess = loadRunState();
+    const restoredFutureRandoms = Array.from({ length: 5 }, () => gameRandom());
 
     assert(
       loadSuccess === true &&
       state.pendingDraft &&
       state.pendingDraft.resolved === false &&
       state.pendingDraft.choices.length === 3 &&
-      state.pendingDraft.choices[0] === originalChoices[0] &&
-      state.pendingDraft.choices[1] === originalChoices[1] &&
-      state.pendingDraft.choices[2] === originalChoices[2],
-      "9.5.3 loadRunState restores exact draft choices and unresolved state on reload"
+      state.pendingDraft.choices.map(item => typeof item === "string" ? item : item.id).every((id, idx) => id === originalChoices[idx]) &&
+      state.pendingDraft.cards.some(card => card.generated === true) &&
+      state.challengeId === "short_fuse" &&
+      state.campaignId === "riftfall" &&
+      state.runSeed === "riftfall-draft-seed" &&
+      state.runId === originalRunId &&
+      state.runTurns === 7 &&
+      state.maxTurns === 4 &&
+      JSON.stringify(restoredFutureRandoms) === JSON.stringify(expectedFutureRandoms),
+      "9.5.3 loadRunState restores draft, challenge, campaign, seed, and exact future RNG state"
     );
 
-    // Resolve draft by selecting card 0, then save again
-    const chosenCardId = state.pendingDraft.choices[0];
+    // Resolve the generated choice, then verify the card remains usable after restore.
+    const generatedChoiceIndex = state.pendingDraft.choices.findIndex(item =>
+      typeof item === "object" && item.generated === true
+    );
     const initialDeckLen = state.masterDeck.length;
-    selectDraftCard(0);
-    assert(state.masterDeck.length === initialDeckLen + 1, "9.5.4 Card successfully drafted into deck");
+    const generatedChoiceId = state.pendingDraft.choices[generatedChoiceIndex].id;
+    const selectedGenerated = selectDraftCard(generatedChoiceIndex);
+    assert(
+      selectedGenerated === true &&
+      state.masterDeck.length === initialDeckLen + 1 &&
+      state.masterDeck.at(-1).id === generatedChoiceId &&
+      state.masterDeck.at(-1).generated === true,
+      "9.5.4 Generated reward can be drafted into the master deck"
+    );
 
     saveRunState(true);
 
     // Reload again: draft must be resolved, choices preserved, and no duplicate rewards
+    state.masterDeck = [];
     loadRunState();
     assert(
       (!state.pendingDraft || state.pendingDraft.resolved === true) &&
-      state.masterDeck.length === initialDeckLen + 1,
-      "9.5.5 Reloading after draft resolution does not re-offer draft or duplicate rewards"
+      state.masterDeck.length === initialDeckLen + 1 &&
+      state.masterDeck.some(card => card.id === generatedChoiceId && card.generated === true),
+      "9.5.5 Reload restores generated card and does not re-offer draft or duplicate reward"
+    );
+
+    startNewRun(STARTER_DECKS[0], "standard", "riftfall");
+    state.encounterIdx = 5;
+    state.route = {
+      loop: 0,
+      currentNodeId: "p2_boss",
+      completedNodeIds: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss", "p2_entry_fight", "p2_mid_elite"],
+      visitedNodeIds: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss", "p2_entry_fight", "p2_mid_elite", "p2_boss"],
+      pendingEventId: null,
+      pendingSelection: false,
+      lastActivitySummary: null
+    };
+    beginEncounter();
+    state.enemyLife = 0;
+    const finalBossWon = handleEncounterVictory();
+    state.campaignId = DEFAULT_CAMPAIGN_ID;
+    state.encounterIdx = 0;
+    state.route = createInitialRouteState(0);
+    const restoredFinalBoss = loadRunState();
+    assert(
+      finalBossWon &&
+      restoredFinalBoss &&
+      state.campaignId === "riftfall" &&
+      getCurrentEncounter().name === "The Void Architect" &&
+      state.route.currentNodeId === "p2_boss" &&
+      state.route.completedNodeIds.includes("p2_boss") &&
+      getAvailableNextRouteNodes().length === 0 &&
+      readGameProfile().profile.unlockedStarterDeckIds.includes("simic_tidecallers"),
+      "9.5.6 Restoring a completed Riftfall final node preserves its campaign and terminal route state"
     );
   } finally {
     state.headless = prevHeadless;
     if (prevDoc === undefined) delete globalThis.document;
     else globalThis.document = prevDoc;
+    if (prevLS === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevLS;
+  }
+}
+
+// --- 9.5.7: Run History Recording & Storage Safety ---
+{
+  const prevLS = globalThis.localStorage;
+  const prevHeadless = state.headless;
+  const memStore = createMemoryStorage();
+  try {
+    resetTestState();
+    state.headless = true;
+    globalThis.localStorage = memStore;
+    startNewRun(STARTER_DECKS[0], "standard", "riftfall", "history-victory-seed");
+    state.encounterIdx = 5;
+    state.route = {
+      loop: 0,
+      currentNodeId: "p2_boss",
+      completedNodeIds: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss", "p2_entry_fight", "p2_mid_elite"],
+      visitedNodeIds: ["p1_start", "p1_upper_rest", "p1_elite", "p1_boss", "p2_entry_fight", "p2_mid_elite", "p2_boss"],
+      pendingEventId: null,
+      pendingSelection: false,
+      lastActivitySummary: null
+    };
+    beginEncounter();
+    state.runTurns = 12;
+    state.enemyLife = 0;
+    const victoryHandled = handleEncounterVictory();
+    const firstHistory = readRunHistory();
+    const duplicateVictory = recordCompletedRun("victory");
+    assert(
+      victoryHandled &&
+      firstHistory.ok &&
+      firstHistory.entries.length === 1 &&
+      firstHistory.entries[0].outcome === "victory" &&
+      firstHistory.entries[0].runId === state.runId &&
+      firstHistory.entries[0].turns === 12 &&
+      duplicateVictory.ok &&
+      duplicateVictory.duplicate &&
+      readRunHistory().entries.length === 1,
+      "9.5.7.1 Final victory records the run once with its ID and turn count"
+    );
+
+    startNewRun(STARTER_DECKS[1], "standard", DEFAULT_CAMPAIGN_ID, "history-defeat-seed");
+    state.runTurns = 4;
+    handleDefeat();
+    const defeatHistory = readRunHistory();
+    assert(
+      defeatHistory.ok &&
+      defeatHistory.entries.length === 2 &&
+      defeatHistory.entries[0].outcome === "defeat" &&
+      defeatHistory.entries[0].turns === 4 &&
+      defeatHistory.entries[1].outcome === "victory",
+      "9.5.7.2 Defeat is recorded as the newest completed run"
+    );
+
+    let allEntriesSaved = true;
+    for (let index = 0; index < MAX_RUN_HISTORY_ENTRIES + 3; index += 1) {
+      state.runId = `history-cap-${index}`;
+      state.runStartedAt = Date.now();
+      state.runHistoryRecorded = false;
+      state.runTurns = index;
+      const saved = recordCompletedRun("defeat");
+      allEntriesSaved = allEntriesSaved && saved.ok;
+    }
+    const cappedHistory = readRunHistory();
+    assert(
+      allEntriesSaved &&
+      cappedHistory.ok &&
+      cappedHistory.entries.length === MAX_RUN_HISTORY_ENTRIES &&
+      cappedHistory.entries[0].runId === `history-cap-${MAX_RUN_HISTORY_ENTRIES + 2}` &&
+      !cappedHistory.entries.some(entry => entry.runId === firstHistory.entries[0].runId),
+      "9.5.7.4 Run history is capped at 25 newest entries"
+    );
+
+    const malformedHistory = "{malformed";
+    memStore.setItem(RUN_HISTORY_KEY, malformedHistory);
+    state.runId = "history-malformed-preserve";
+    state.runHistoryRecorded = false;
+    const malformedWrite = recordCompletedRun("defeat");
+    assert(
+      !readRunHistory().ok &&
+      !malformedWrite.ok &&
+      memStore.getItem(RUN_HISTORY_KEY) === malformedHistory,
+      "9.5.7.5 Malformed history reports an error and is never overwritten"
+    );
+
+    globalThis.localStorage = {
+      getItem: () => null,
+      setItem: () => { throw new Error("quota exceeded"); }
+    };
+    state.runId = "history-storage-failure";
+    state.runHistoryRecorded = false;
+    const storageFailure = recordCompletedRun("defeat");
+    assert(
+      !storageFailure.ok &&
+      state.runHistoryRecorded === false &&
+      state.runHistoryError.includes("quota exceeded"),
+      "9.5.7.6 Storage write failures are surfaced without marking the run recorded"
+    );
+  } finally {
+    state.headless = prevHeadless;
     if (prevLS === undefined) delete globalThis.localStorage;
     else globalThis.localStorage = prevLS;
   }
@@ -2668,6 +3815,147 @@ console.log(`\n=== SECTION 9: POST-BATTLE CARD DRAFT & SAVE RESTORATION ===`);
     "9.6.2 pendingDraft normalization is byte-for-byte symmetric across game.js and desktop.js"
   );
 
+  const challengePayload = { ...rawValid, challengeId: "short_fuse" };
+  const challengeGame = normalizeCanonicalSave(challengePayload);
+  const challengeDesktop = DesktopBridge.normalizeSaveObject(challengePayload);
+  const invalidChallenge = normalizeCanonicalSave({ ...rawValid, challengeId: "not_a_challenge" });
+  assert(
+    challengeGame.valid &&
+    challengeDesktop.valid &&
+    challengeGame.save.challengeId === "short_fuse" &&
+    challengeDesktop.save.challengeId === "short_fuse" &&
+    challengeGame.save.saveIntegrity === challengeDesktop.save.saveIntegrity &&
+    invalidChallenge.valid &&
+    invalidChallenge.save.challengeId === undefined,
+    "9.6.3 Challenge save normalization and checksums are symmetric, with unknown IDs sanitized"
+  );
+
+  const campaignPayload = { ...rawValid, campaignId: "riftfall" };
+  const campaignGame = normalizeCanonicalSave(campaignPayload);
+  const campaignDesktop = DesktopBridge.normalizeSaveObject(campaignPayload);
+  const invalidCampaign = normalizeCanonicalSave({ ...rawValid, campaignId: "unknown_campaign" });
+  assert(
+    campaignGame.valid &&
+    campaignDesktop.valid &&
+    campaignGame.save.campaignId === "riftfall" &&
+    campaignDesktop.save.campaignId === "riftfall" &&
+    campaignGame.save.saveIntegrity === campaignDesktop.save.saveIntegrity &&
+    invalidCampaign.valid &&
+    invalidCampaign.save.campaignId === undefined,
+    "9.6.4 Campaign save normalization and checksums are symmetric, with unknown IDs sanitized"
+  );
+
+  const seededPayload = { ...rawValid, runSeed: "shared-seed", rngState: 123456789 };
+  const seededGame = normalizeCanonicalSave(seededPayload);
+  const seededDesktop = DesktopBridge.normalizeSaveObject(seededPayload);
+  const invalidSeedPayload = { ...rawValid, runSeed: "s".repeat(MAX_RUN_SEED_LENGTH + 1), rngState: 123456789 };
+  const invalidSeedGame = normalizeCanonicalSave(invalidSeedPayload);
+  assert(
+    seededGame.valid &&
+    seededDesktop.valid &&
+    seededGame.save.runSeed === "shared-seed" &&
+    seededDesktop.save.runSeed === "shared-seed" &&
+    seededGame.save.rngState === 123456789 &&
+    seededGame.save.saveIntegrity === seededDesktop.save.saveIntegrity &&
+    invalidSeedGame.valid &&
+    invalidSeedGame.save.runSeed === undefined &&
+    invalidSeedGame.save.rngState === undefined,
+    "9.6.5 Seed and PRNG state normalize consistently across game and desktop saves"
+  );
+
+  const historyPayload = {
+    ...rawValid,
+    runId: "run-history-roundtrip",
+    runStartedAt: 1699999999000,
+    runHistoryRecorded: true,
+    runTurns: 14
+  };
+  const historyGame = normalizeCanonicalSave(historyPayload);
+  const historyDesktop = DesktopBridge.normalizeSaveObject(historyPayload);
+  assert(
+    historyGame.valid &&
+    historyDesktop.valid &&
+    historyGame.save.runId === "run-history-roundtrip" &&
+    historyGame.save.runStartedAt === 1699999999000 &&
+    historyGame.save.runHistoryRecorded === true &&
+    historyGame.save.runTurns === 14 &&
+    historyGame.save.saveIntegrity === historyDesktop.save.saveIntegrity,
+    "9.6.6 Run history identity fields normalize consistently with matching checksums"
+  );
+
+  const evolvedPayload = {
+    ...rawValid,
+    masterDeck: [{
+      id: "llanowar_elves",
+      permPowerBonus: 1,
+      permToughnessBonus: 1,
+      evolutionId: "trampler",
+      keywords: ["Mana +1 {G}", "Trample"]
+    }]
+  };
+  const evolvedGame = normalizeCanonicalSave(evolvedPayload);
+  const evolvedDesktop = DesktopBridge.normalizeSaveObject(evolvedPayload);
+  assert(
+    evolvedGame.valid &&
+    evolvedDesktop.valid &&
+    JSON.stringify(evolvedGame.save.masterDeck) === JSON.stringify(evolvedDesktop.save.masterDeck) &&
+    evolvedGame.save.masterDeck[0].evolutionId === "trampler" &&
+    evolvedGame.save.saveIntegrity === evolvedDesktop.save.saveIntegrity,
+    "9.6.3 Game and desktop normalizers preserve evolved-card metadata with matching integrity checks"
+  );
+
+  const invalidEvolutionPayload = {
+    ...rawValid,
+    masterDeck: [
+      { id: "forest", evolutionId: "veteran" },
+      { id: "llanowar_elves", evolutionId: "trampler" }
+    ]
+  };
+  const invalidEvolutionGame = normalizeCanonicalSave(invalidEvolutionPayload);
+  const invalidEvolutionDesktop = DesktopBridge.normalizeSaveObject(invalidEvolutionPayload);
+  assert(
+    invalidEvolutionGame.valid &&
+    invalidEvolutionDesktop.valid &&
+    !Object.prototype.hasOwnProperty.call(invalidEvolutionGame.save.masterDeck[0], "evolutionId") &&
+    !Object.prototype.hasOwnProperty.call(invalidEvolutionDesktop.save.masterDeck[0], "evolutionId") &&
+    !Object.prototype.hasOwnProperty.call(invalidEvolutionGame.save.masterDeck[1], "evolutionId") &&
+    !Object.prototype.hasOwnProperty.call(invalidEvolutionDesktop.save.masterDeck[1], "evolutionId"),
+    "9.6.4 Invalid evolution metadata is discarded for non-Creatures and incomplete applied effects"
+  );
+
+  const generatedCard = sampleGeneratedCreature(new Set(["G", "R"]), 4444);
+  const generatedPayload = {
+    ...rawValid,
+    masterDeck: [
+      { id: "lightning_bolt" },
+      { id: generatedCard.id, generatedDefinition: generatedCard }
+    ],
+    pendingDraft: {
+      choices: [{ id: generatedCard.id, generatedDefinition: generatedCard }],
+      encounterIdx: 1,
+      resolved: false
+    }
+  };
+  const generatedGame = normalizeCanonicalSave(generatedPayload);
+  const generatedDesk = DesktopBridge.normalizeSaveObject(generatedPayload);
+  const tamperedGenerated = {
+    ...generatedGame.save,
+    masterDeck: generatedGame.save.masterDeck.map(item =>
+      item.id === generatedCard.id
+        ? { ...item, generatedDefinition: { ...item.generatedDefinition, power: 99 } }
+        : item
+    )
+  };
+  assert(
+    generatedGame.valid &&
+    generatedDesk.valid &&
+    generatedGame.save.masterDeck.some(item => item.generatedDefinition?.id === generatedCard.id) &&
+    generatedGame.save.pendingDraft.choices.some(item => item.generatedDefinition?.id === generatedCard.id) &&
+    JSON.stringify(generatedGame.save) === JSON.stringify(generatedDesk.save) &&
+    DesktopBridge.normalizeSaveObject(tamperedGenerated).valid === false,
+    "9.6.3 Desktop and game save normalizers preserve generated cards and reject tampered generated definitions"
+  );
+
   // Sanitize unrecognized cards in pendingDraft
   const rawWithCorruptChoices = {
     ...rawValid,
@@ -2685,10 +3973,10 @@ console.log(`\n=== SECTION 9: POST-BATTLE CARD DRAFT & SAVE RESTORATION ===`);
     sanitizedGame.save.pendingDraft.choices.length === 2 &&
     !sanitizedGame.save.pendingDraft.choices.includes("fake_nonexistent_card_xyz") &&
     JSON.stringify(sanitizedGame.save.pendingDraft) === JSON.stringify(sanitizedDesk.save.pendingDraft),
-    "9.6.3 Corrupt or unrecognized card IDs are filtered from pendingDraft choices symmetrically"
+    "9.6.4 Corrupt or unrecognized card IDs are filtered from pendingDraft choices symmetrically"
   );
 
-  // 9.6.4: Backup envelope format preservation
+  // 9.6.5: Backup envelope format preservation
   const backupEnvelope = {
     format: "manastorm-save-backup",
     save: rawValid
@@ -2698,16 +3986,16 @@ console.log(`\n=== SECTION 9: POST-BATTLE CARD DRAFT & SAVE RESTORATION ===`);
     normBackup.valid === true &&
     normBackup.save.pendingDraft &&
     normBackup.save.pendingDraft.choices.length === 3,
-    "9.6.4 Backup envelope format preserves pendingDraft through DesktopBridge.normalizeSaveObject"
+    "9.6.5 Backup envelope format preserves pendingDraft through DesktopBridge.normalizeSaveObject"
   );
 
-  // 9.6.5: compareSaveFreshness checks draft resolution when timestamp and encounter match
+  // 9.6.6: compareSaveFreshness checks draft resolution when timestamp and encounter match
   const savePending = { savedAt: 1000, encounterIdx: 1, inShop: false, pendingDraft: { resolved: false } };
   const saveResolved = { savedAt: 1000, encounterIdx: 1, inShop: false, pendingDraft: { resolved: true } };
   assert(
     DesktopBridge.compareSaveFreshness(saveResolved, savePending) > 0 &&
     DesktopBridge.compareSaveFreshness(savePending, saveResolved) < 0,
-    "9.6.5 compareSaveFreshness prioritizes resolved draft over pending draft when timestamp/encounter match"
+    "9.6.6 compareSaveFreshness prioritizes resolved draft over pending draft when timestamp/encounter match"
   );
 }
 
@@ -2738,7 +4026,8 @@ console.log(`\n=== SECTION 9: POST-BATTLE CARD DRAFT & SAVE RESTORATION ===`);
   );
 
   // 9.7.3: Selection by card ID string
-  const targetCardId = state.pendingDraft.choices[2];
+  const targetCard = state.pendingDraft.choices[2];
+  const targetCardId = typeof targetCard === "string" ? targetCard : targetCard.id;
   const deckSizeBefore = state.masterDeck.length;
   const pickedById = selectDraftCard(targetCardId);
   assert(
@@ -2767,6 +4056,207 @@ console.log(`\n=== SECTION 9: POST-BATTLE CARD DRAFT & SAVE RESTORATION ===`);
     generateDraftRewardPool === sampleDraftPool,
     "9.7.5 generateDraftRewardPool is exposed as alias to sampleDraftPool"
   );
+}
+
+// --- 10.1: Searchable Card Collection ---
+{
+  const cards = Object.values(CARD_DB);
+  const originalOrder = cards.map(card => card.id);
+  const blueCards = filterCardCollection(cards, { color: "U" });
+  const creatureRules = filterCardCollection(cards, { type: "Creature", query: "landfall" });
+  const colorlessCards = filterCardCollection(cards, { color: "C" });
+  const sortedByMana = filterCardCollection(cards, { sort: "mana" });
+  const emptyResults = filterCardCollection(cards, { query: "no-card-matches-this-query" });
+  const escapedCard = renderCardCollectionCard({
+    ...CARD_DB.forest,
+    name: "<img src=x>",
+    rules: "<script>alert(1)</script>"
+  });
+  assert(
+    blueCards.some(card => card.id === "island") &&
+    blueCards.some(card => card.id === "hallowed_fountain") &&
+    blueCards.some(card => card.id === "ledger_shredder") &&
+    !blueCards.some(card => card.id === "forest"),
+    "10.1.1 Card color filter includes multicolor lands and colored spells"
+  );
+  assert(
+    creatureRules.length > 0 &&
+    creatureRules.every(card => card.type === "Creature" && `${card.rules} ${card.name}`.toLowerCase().includes("landfall")),
+    "10.1.2 Search text and type filters combine against card names and rules"
+  );
+  assert(
+    colorlessCards.some(card => card.id === "thoughtcast") &&
+    !colorlessCards.some(card => card.id === "forest") &&
+    getCardCollectionTypes().includes("Creature"),
+    "10.1.3 Colorless filtering and available type discovery work"
+  );
+  assert(
+    sortedByMana.length === cards.length &&
+    sortedByMana.every((card, index) => index === 0 || getCardCollectionManaValue(sortedByMana[index - 1]) <= getCardCollectionManaValue(card)) &&
+    JSON.stringify(cards.map(card => card.id)) === JSON.stringify(originalOrder),
+    "10.1.4 Sorting returns an ordered copy without mutating the card catalog"
+  );
+  assert(
+    emptyResults.length === 0 &&
+    escapedCard.includes("&lt;img src=x&gt;") &&
+    escapedCard.includes("&lt;script&gt;"),
+    "10.1.5 Empty search results and escaped catalog text are handled safely"
+  );
+}
+
+// --- 10.2: Bounded Structured Combat Log ---
+{
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+  state.enemyLife = 1000;
+  state.enemyMaxLife = 1000;
+  state.turn = 1;
+  state.maxTurns = 5;
+  state.playerLife = 20;
+  state.playerCreatures = [{
+    uid: "log-attacker",
+    name: "Log Attacker",
+    power: 4,
+    toughness: 4,
+    tempPower: 0,
+    tempToughness: 0,
+    keywords: [],
+    tempKeywords: [],
+    attacking: true,
+    summoningSick: false,
+    count: 1
+  }];
+  state.enemyCreatures = [{
+    uid: "log-blocker",
+    name: "Log Blocker",
+    power: 1,
+    toughness: 5,
+    keywords: [],
+    frozen: false
+  }];
+  addResonance(1, "Log Test Trigger");
+  executeCombatAndEndTurn();
+  const encounterEvents = getCombatLogEntries();
+  const triggerIndex = encounterEvents.findIndex(event => event.message.includes("Log Test Trigger"));
+  const combatIndex = encounterEvents.findIndex(event => event.message.startsWith("Attack resolved"));
+  const blockerIndex = encounterEvents.findIndex(event => event.type === "blocker");
+  const playerDamageIndex = encounterEvents.findIndex(event => event.message.startsWith("Player dealt"));
+  const retaliationIndex = encounterEvents.findIndex(event => event.message.startsWith("Enemy retaliation"));
+  const nextTurnIndex = encounterEvents.findIndex(event => event.message.startsWith("Turn 2 begins"));
+  assert(
+    encounterEvents[0].type === "encounter" &&
+    encounterEvents[1].type === "turn" &&
+    triggerIndex > 0 &&
+    combatIndex > triggerIndex &&
+    blockerIndex > combatIndex &&
+    playerDamageIndex > blockerIndex &&
+    retaliationIndex > playerDamageIndex &&
+    nextTurnIndex > retaliationIndex,
+    "10.2.1 Encounter, trigger, blocker, damage, retaliation, and next-turn events retain resolution order"
+  );
+  assert(
+    encounterEvents.some(event => event.type === "damage" && event.details.lifeAfter === 19) &&
+    encounterEvents.every((event, index) => index === 0 || event.id > encounterEvents[index - 1].id),
+    "10.2.2 Combat log records Life changes and monotonic event ordering"
+  );
+
+  for (let index = 0; index < MAX_COMBAT_LOG_ENTRIES + 10; index += 1) {
+    recordCombatEvent("trigger", `bounded-event-${index}`);
+  }
+  const boundedEvents = getCombatLogEntries();
+  assert(
+    boundedEvents.length === MAX_COMBAT_LOG_ENTRIES &&
+    boundedEvents[boundedEvents.length - 1].message === `bounded-event-${MAX_COMBAT_LOG_ENTRIES + 9}`,
+    "10.2.3 Combat log keeps only the newest 100 events"
+  );
+
+  state.encounterIdx = 1;
+  beginEncounter();
+  const nextEncounterEvents = getCombatLogEntries();
+  assert(
+    nextEncounterEvents.length === 2 &&
+    nextEncounterEvents[0].type === "encounter" &&
+    nextEncounterEvents[1].type === "turn",
+    "10.2.4 Starting another encounter clears the prior encounter log"
+  );
+}
+
+// === SECTION 11: CARD PURGE, PROCEDURAL AUDIO & KEYWORD GLOSSARY ===
+{
+  console.log("\n=== SECTION 11: CARD PURGE, PROCEDURAL AUDIO & KEYWORD GLOSSARY ===");
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+
+  // 11.1 canSafelyPurgeCard and getAvailablePurgeTargets
+  assert(state.masterDeck.length === 40, "11.1.1 Initial deck has 40 cards");
+  assert(canSafelyPurgeCard().allowed === true, "11.1.2 canSafelyPurgeCard allows thinning when deck has 40 cards");
+  assert(getAvailablePurgeTargets().length === 40, "11.1.3 getAvailablePurgeTargets returns all 40 cards");
+
+  // Artificial reduction to 30 cards
+  const savedExtraCards = state.masterDeck.splice(30);
+  assert(state.masterDeck.length === 30, "11.1.4 Reduced deck to exactly 30 cards");
+  assert(canSafelyPurgeCard().allowed === false, "11.1.5 canSafelyPurgeCard guards deck at 30 cards");
+  assert(getAvailablePurgeTargets().length === 0, "11.1.6 getAvailablePurgeTargets returns empty array when at min deck size");
+
+  // Restore cards
+  state.masterDeck.push(...savedExtraCards);
+  assert(state.masterDeck.length === 40, "11.1.7 Restored deck to 40 cards");
+
+  // 11.2 completeCardPurgePurchase
+  state.gold = 10;
+  generateShopStock(false);
+  const purgeUpgradeIdx = state.shopStock.upgrades.findIndex(u => u.id === "card_purge");
+  assert(purgeUpgradeIdx !== -1, "11.2.1 card_purge upgrade is present in shop upgrades stock");
+
+  const purgeUpg = state.shopStock.upgrades[purgeUpgradeIdx];
+  const targetCard = state.masterDeck.find(c => c.id === "llanowar_elves") || state.masterDeck[0];
+  const targetUid = targetCard.uid;
+  const initialDeckLen = state.masterDeck.length;
+
+  // Insufficient gold test
+  state.gold = 0;
+  const failedGoldPurge = completeCardPurgePurchase(purgeUpgradeIdx, targetUid);
+  assert(failedGoldPurge === false, "11.2.2 completeCardPurgePurchase fails with insufficient gold");
+  assert(state.masterDeck.length === initialDeckLen, "11.2.3 Master deck unchanged after failed gold purge");
+
+  // Successful purge test
+  state.gold = purgeUpg.cost + 5;
+  const initialGold = state.gold;
+  const successPurge = completeCardPurgePurchase(purgeUpgradeIdx, targetUid);
+  assert(successPurge === true, "11.2.4 completeCardPurgePurchase succeeds with valid state and gold");
+  assert(state.gold === initialGold - purgeUpg.cost, "11.2.5 Gold deducted correctly for card purge");
+  assert(purgeUpg.bought === true, "11.2.6 card_purge upgrade marked bought");
+  assert(state.masterDeck.length === initialDeckLen - 1, "11.2.7 Card removed from master deck");
+  assert(!state.masterDeck.some(c => c.uid === targetUid), "11.2.8 Specific purged card UID is no longer in master deck");
+
+  // Purge when already bought
+  const repeatPurge = completeCardPurgePurchase(purgeUpgradeIdx, state.masterDeck[0].uid);
+  assert(repeatPurge === false, "11.2.9 Cannot repeat already bought purge upgrade");
+
+  // 11.3 Procedural Audio Cues
+  assert(typeof SOUND_CUES === "object" && SOUND_CUES !== null, "11.3.1 SOUND_CUES object exists");
+  assert(Array.isArray(SOUND_CUES.defeat) && SOUND_CUES.defeat.length >= 2, "11.3.2 defeat sound cue defined with rich harmonic tones");
+  assert(Array.isArray(SOUND_CUES.shopBuy) && SOUND_CUES.shopBuy.length >= 2, "11.3.3 shopBuy sound cue defined with coin chime");
+  assert(Array.isArray(SOUND_CUES.cardPurge) && SOUND_CUES.cardPurge.length >= 2, "11.3.4 cardPurge sound cue defined with dissolve tone");
+  assert(Array.isArray(SOUND_CUES.relicTrigger) && SOUND_CUES.relicTrigger.length >= 2, "11.3.5 relicTrigger sound cue defined with harmonic tones");
+
+  // 11.4 Keyword Glossary & Accessibility
+  assert(typeof KEYWORD_GLOSSARY === "object" && KEYWORD_GLOSSARY !== null, "11.4.1 KEYWORD_GLOSSARY object exists");
+  const requiredKeywords = [
+    "Trample", "Haste", "Prowess", "Landfall", "Double Strike",
+    "Deathtouch", "Lifelink", "Flying", "Connive", "Frozen", "Freeze",
+    "Anthem", "Dredge", "Recur", "Metalcraft", "Undergrowth",
+    "Tribal", "Overdrive", "Ramp", "Ritual", "Tokens", "Bounce",
+    "Burn", "Vigilance", "Ward"
+  ];
+  const allKeywordsPresent = requiredKeywords.every(kw => typeof KEYWORD_GLOSSARY[kw] === "string" && KEYWORD_GLOSSARY[kw].length > 10);
+  assert(allKeywordsPresent, "11.4.2 All core keywords documented with clear explanations in KEYWORD_GLOSSARY");
+
+  // Verify renderKeywordTagsHtml generates accessible markup
+  const sampleTagsHtml = renderKeywordTagsHtml(["Trample"], ["Flying"]);
+  assert(sampleTagsHtml.includes('tabindex="0"'), "11.4.3 Keyword tags include tabindex=0 for keyboard accessibility");
+  assert(sampleTagsHtml.includes('role="note"'), "11.4.4 Keyword tags include role=note for screen readers");
+  assert(sampleTagsHtml.includes('title="Trample:'), "11.4.5 Keyword tags include complete glossary description in title attribute");
 }
 
 console.log(`\n========================================`);

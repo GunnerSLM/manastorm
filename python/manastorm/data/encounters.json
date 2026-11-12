@@ -1,0 +1,105 @@
+[
+  {
+    "plane": 1,
+    "tier": "SKIRMISH WARD",
+    "name": "Garruk's Vanguard",
+    "maxLife": 78,
+    "reward": 7,
+    "rule": "WILD STAMPEDE: Spawns a 2/2 Beast Blocker each turn (spawns 2× Beasts on Turn 4+).",
+    "spawn": {
+      "name": "Timber Wolf",
+      "power": 2,
+      "toughness": 2,
+      "color": "G",
+      "keywords": []
+    },
+    "stampedeTurn": 4
+  },
+  {
+    "plane": 1,
+    "tier": "ELITE WARD",
+    "name": "Krenko, Mob Boss",
+    "maxLife": 120,
+    "reward": 8,
+    "rule": "GOBLIN HORDE: Spawns one 2/1 Goblin on odd turns, and DOUBLES spawns (two 2/1 Goblins) on even turns!",
+    "spawn": {
+      "name": "Goblin Raider",
+      "power": 2,
+      "toughness": 1,
+      "color": "R",
+      "keywords": [],
+      "count": 1
+    },
+    "evenTurnDoubleSpawn": true
+  },
+  {
+    "plane": 1,
+    "tier": "PLANAR OVERLORD",
+    "name": "Sheoldred, the Apocalypse",
+    "maxLife": 165,
+    "reward": 11,
+    "rule": "PHYREXIAN STAX: Spawns a 3/4 Blocker each turn, drains 1 Life/turn (healing Sheoldred), and halves direct Burn Power.",
+    "spawn": {
+      "name": "Phyrexian Obliterator",
+      "power": 3,
+      "toughness": 4,
+      "color": "B",
+      "keywords": []
+    },
+    "staxDrain": 1,
+    "burnResistance": 0.5
+  },
+  {
+    "plane": 2,
+    "tier": "SKIRMISH WARD",
+    "name": "Talrand, Sky Summoner",
+    "maxLife": 245,
+    "reward": 12,
+    "rule": "AERIAL WARD: Spawns a 3/3 Flying Drake each turn. Your first Instant/Sorcery each turn spawns a 1/1 Flying Drake unless you control 4+ Lands.",
+    "spawn": {
+      "name": "Sky Drake",
+      "power": 3,
+      "toughness": 3,
+      "color": "U",
+      "keywords": [
+        "Flying"
+      ]
+    },
+    "spellWardTax": true
+  },
+  {
+    "plane": 2,
+    "tier": "ELITE WARD",
+    "name": "Vorinclex, Monstrous Raider",
+    "maxLife": 380,
+    "reward": 14,
+    "rule": "IRON HIDE: Can't be burned (Direct Burn = 0)! Spawns a 4/4 Hydra each turn; surviving Blockers deal +1 extra damage.",
+    "spawn": {
+      "name": "Vorinclex Hydra",
+      "power": 4,
+      "toughness": 4,
+      "color": "G",
+      "keywords": []
+    },
+    "burnImmune": true,
+    "staxHideBonus": 1
+  },
+  {
+    "plane": 2,
+    "tier": "PLANAR OVERLORD",
+    "name": "Elesh Norn, Grand Cenobite",
+    "maxLife": 600,
+    "reward": 16,
+    "rule": "CENOBITE AURA: Spawns a 4/5 Praetor Guard each turn. Reinforces with an extra Guard on even turns!",
+    "spawn": {
+      "name": "Praetor Guard",
+      "power": 4,
+      "toughness": 4,
+      "color": "W",
+      "keywords": [],
+      "count": 1
+    },
+    "cenobiteAura": 1,
+    "evenTurnBonusGuard": 1
+  }
+]

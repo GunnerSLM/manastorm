@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <p id="sound-feedback-status" class="sound-feedback-status" role="status" aria-live="polite" hidden></p>
   <div id="app" class="game-shell">
     <!-- LEFT SIDEBAR: Run Status, Score Engine (Power × Resonance), Mana Pool, Zones -->
     <aside class="hud-sidebar">
@@ -20,6 +21,9 @@
         <div class="plane-badge" id="plane-badge">PLANE 1 • SKIRMISH</div>
         <h2 class="boss-name" id="boss-name">Garruk's Vanguard</h2>
         <p class="boss-rule" id="boss-rule">Standard Rules — Break the enemy life total within 5 Turns.</p>
+        <span class="run-challenge-badge" id="run-challenge-badge" hidden></span>
+        <span class="run-challenge-badge" id="run-campaign-badge" hidden></span>
+        <span class="run-challenge-badge" id="run-seed-badge" hidden></span>
         <div class="life-bar-wrap" title="Enemy Boss Life Total">
           <div class="life-bar-ghost" id="enemy-life-ghost"></div>
           <div class="life-bar-fill enemy-life-fill" id="enemy-life-bar"></div>
@@ -51,6 +55,7 @@
           <span>Projected Strike:</span>
           <strong id="calc-total">0 DMG</strong>
         </div>
+        <p class="projection-feedback" id="projection-feedback" role="status" aria-live="polite" hidden></p>
         <div class="math-preview threat-row">
           <span>Enemy Retaliation:</span>
           <strong id="calc-threat">0</strong>
@@ -94,6 +99,9 @@
           <span>📚 Library</span>
           <strong id="library-count">33</strong>
         </button>
+        <button type="button" class="zone-btn" id="btn-open-card-collection" title="Search the complete card catalog">
+          <span>🗂️ Card Catalog</span>
+        </button>
         <button type="button" class="zone-btn" id="btn-view-graveyard" title="Inspect Graveyard (Shortcut: G)">
           <span>🪦 Graveyard</span>
           <strong id="graveyard-count">0</strong>
@@ -101,6 +109,9 @@
         <button type="button" class="zone-btn" id="btn-view-route" title="Inspect or choose your path on the Planar Route Map (Shortcut: R)">
           <span>🗺️ Planar Route</span>
           <strong id="route-step-badge">1/7</strong>
+        </button>
+        <button type="button" class="zone-btn" id="btn-run-history" title="Review completed runs">
+          <span>📜 Run History</span>
         </button>
         <button type="button" class="zone-btn" id="btn-new-run" title="Start a new run or switch Planeswalker guild">
           <span>🔄 New Run / Deck</span>
@@ -180,7 +191,7 @@
 
         <!-- Center Combat Log / Floating Trigger Ticker -->
         <div class="combat-divider">
-          <div class="combat-log-strip" id="combat-log-strip" aria-live="polite">
+          <div class="combat-log-strip" id="combat-log-strip" role="button" tabindex="0" aria-label="Open detailed combat log" aria-keyshortcuts="Enter Space" title="Open the detailed combat log">
             Draw 7 cards from your 40-card deck. Play 1 Land per turn, summon Creatures, and trigger Command Zone Relics!
           </div>
         </div>
@@ -212,6 +223,7 @@
         <div class="hand-row" id="player-hand">
           <!-- Rendered by JS -->
         </div>
+        <p class="hand-play-feedback" id="hand-play-feedback" role="status" aria-live="polite" hidden></p>
       </footer>
     </main>
   </div>
@@ -266,7 +278,7 @@
         <div class="shop-gold-pill">Gold: <strong id="shop-gold">$10</strong></div>
       </header>
 
-      <p class="shop-subtitle" id="shop-reward-summary">You earned $6 base reward + $2 unused turn bonus!</p>
+      <p class="shop-subtitle" id="shop-reward-summary" aria-live="polite">You earned $6 base reward + $2 unused turn bonus!</p>
 
       <div class="shop-grid">
         <!-- Column 1: Command Zone Relics for Sale -->
@@ -309,6 +321,56 @@
     </div>
   </dialog>
 
+  <!-- MODAL 2B: Searchable Card Collection -->
+  <dialog id="card-collection-dialog" closedby="any" aria-labelledby="card-collection-title">
+    <div class="modal-inner collection-modal">
+      <header class="modal-header">
+        <div>
+          <span class="plane-badge">MULTIVERSE ARCHIVE</span>
+          <h2 id="card-collection-title">Card Catalog</h2>
+        </div>
+        <form method="dialog">
+          <button type="submit" class="btn-close">✕ Close</button>
+        </form>
+      </header>
+      <p class="deck-modal-desc">Search every card by name or rules text, then narrow the archive by color or type.</p>
+      <div class="collection-filters">
+        <label>
+          <span>Search cards</span>
+          <input id="collection-search" type="search" autocomplete="off" placeholder="Name, type, or rules text" autofocus />
+        </label>
+        <label>
+          <span>Color</span>
+          <select id="collection-color-filter">
+            <option value="all">All colors</option>
+            <option value="G">Green</option>
+            <option value="R">Red</option>
+            <option value="B">Black</option>
+            <option value="U">Blue</option>
+            <option value="W">White</option>
+            <option value="C">Colorless</option>
+          </select>
+        </label>
+        <label>
+          <span>Type</span>
+          <select id="collection-type-filter">
+            <option value="all">All types</option>
+          </select>
+        </label>
+        <label>
+          <span>Sort</span>
+          <select id="collection-sort">
+            <option value="name">Name (A–Z)</option>
+            <option value="mana">Mana value (low–high)</option>
+            <option value="type">Type, then name</option>
+          </select>
+        </label>
+      </div>
+      <p id="collection-result-count" class="collection-result-count" role="status" aria-live="polite"></p>
+      <div id="collection-results" class="collection-results" role="region" aria-label="Card catalog results" tabindex="0"></div>
+    </div>
+  </dialog>
+
   <!-- MODAL 3: New Run / Starter Guild Choice -->
   <dialog id="newrun-dialog" closedby="any" aria-labelledby="newrun-title">
     <div class="modal-inner newrun-modal">
@@ -319,6 +381,26 @@
         </form>
       </header>
       <p class="deck-modal-desc" id="newrun-desc">Each 40-card deck mixes 17 Lands (including Fetch Lands) and 23 Spells, plus 1 starting Command Zone Relic.</p>
+      <div class="run-challenge-picker">
+        <label for="run-challenge-select">Run Challenge</label>
+        <select id="run-challenge-select" aria-describedby="run-challenge-desc"></select>
+        <p id="run-challenge-desc" aria-live="polite"></p>
+      </div>
+      <div class="run-challenge-picker">
+        <label for="run-campaign-select">Campaign</label>
+        <select id="run-campaign-select" aria-describedby="run-campaign-desc"></select>
+        <p id="run-campaign-desc" aria-live="polite"></p>
+      </div>
+      <div class="run-challenge-picker run-seed-picker">
+        <label for="run-seed-input">Run Seed (optional)</label>
+        <div class="run-seed-controls">
+          <input id="run-seed-input" type="text" maxlength="64" autocomplete="off" placeholder="Leave blank for a random run" aria-describedby="run-seed-desc" />
+          <button type="button" class="btn-secondary" id="btn-use-daily-seed">Use Daily Seed</button>
+          <button type="button" class="btn-secondary" id="btn-copy-run-seed">Copy Seed</button>
+        </div>
+        <p id="run-seed-desc" aria-live="polite">Use the same seed to replay the same shuffles and rewards. Daily seeds use the UTC date.</p>
+      </div>
+      <p class="starter-unlock-status" id="starter-unlock-status" role="status" aria-live="polite"></p>
       <div class="starter-decks-grid" id="starter-decks-grid"></div>
     </div>
   </dialog>
@@ -354,7 +436,7 @@
     <div class="modal-inner victory-modal">
       <header class="modal-header">
         <div>
-          <span class="plane-badge">PLANE 2 CONQUERED • MULTIVERSE SAVED</span>
+          <span class="plane-badge" id="victory-badge">PLANE 2 CONQUERED • MULTIVERSE SAVED</span>
           <h2 id="victory-title">🏆 Planeswalker Ascendant!</h2>
         </div>
       </header>
@@ -382,6 +464,40 @@
       <p class="deck-modal-desc" id="route-dialog-desc">Navigate the branching paths of the Blind Eternities. Choose between combat wards, leylines, planar anomalies, and sanctum outposts.</p>
       <div class="route-activity-banner" id="route-activity-banner" hidden></div>
       <div class="route-map-grid" id="route-map-grid" role="region" aria-label="Branching Planar Route Map"></div>
+    </div>
+  </dialog>
+
+  <!-- MODAL 6C: Completed Run History -->
+  <dialog id="run-history-dialog" closedby="any" aria-labelledby="run-history-title">
+    <div class="modal-inner run-history-modal">
+      <header class="modal-header">
+        <div>
+          <span class="plane-badge">PLANESWALKER ARCHIVE</span>
+          <h2 id="run-history-title">Run History</h2>
+        </div>
+        <form method="dialog">
+          <button type="submit" class="btn-close">✕ Close</button>
+        </form>
+      </header>
+      <p class="deck-modal-desc" id="run-history-status" role="status" aria-live="polite"></p>
+      <div class="run-history-list" id="run-history-list" role="region" aria-label="Completed run records"></div>
+    </div>
+  </dialog>
+
+  <!-- MODAL 6D: Encounter Combat Log -->
+  <dialog id="combat-log-dialog" closedby="any" aria-labelledby="combat-log-title">
+    <div class="modal-inner combat-log-modal">
+      <header class="modal-header">
+        <div>
+          <span class="plane-badge">ENCOUNTER RECORD</span>
+          <h2 id="combat-log-title">Combat Log</h2>
+        </div>
+        <form method="dialog">
+          <button type="submit" class="btn-close">✕ Close</button>
+        </form>
+      </header>
+      <p class="deck-modal-desc" id="combat-log-status" role="status" aria-live="polite"></p>
+      <ol class="combat-log-entries" id="combat-log-entries" aria-label="Current encounter events"></ol>
     </div>
   </dialog>
 
@@ -433,6 +549,41 @@
               <button type="button" class="seg-btn" data-motion-mode="reduced">Reduced</button>
             </div>
           </div>
+
+          <div class="settings-row">
+            <div class="settings-label-col">
+              <strong>Combat Animation Speed</strong>
+              <small>Shorten or skip combat presentation timing. Reduced Motion always disables animation delays.</small>
+            </div>
+            <div class="segmented-group" id="settings-combat-speed-group" role="group" aria-label="Combat Animation Speed">
+              <button type="button" class="seg-btn active" data-combat-speed="normal">Normal</button>
+              <button type="button" class="seg-btn" data-combat-speed="fast">Fast</button>
+              <button type="button" class="seg-btn" data-combat-speed="instant">Instant</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-card">
+          <h3>🔊 Optional Sound Feedback</h3>
+          <label class="settings-row sound-toggle-row" for="settings-sound-enabled">
+            <span class="settings-label-col">
+              <strong>Sound Effects</strong>
+              <small>Muted by default. Audio starts only after you enable it.</small>
+            </span>
+            <input class="sound-toggle-input" type="checkbox" id="settings-sound-enabled" />
+          </label>
+          <div class="settings-row sound-volume-row">
+            <label class="settings-label-col" for="settings-sound-volume">
+              <strong>Volume</strong>
+              <small>Keep feedback quiet and distinct.</small>
+            </label>
+            <input type="range" id="settings-sound-volume" min="0" max="100" step="5" value="30"
+              aria-label="Sound effect volume" aria-describedby="settings-sound-volume-value" />
+            <output id="settings-sound-volume-value" for="settings-sound-volume">30%</output>
+          </div>
+          <p class="settings-status-msg" id="settings-sound-status" role="status" aria-live="polite">
+            Sound is muted until you enable it.
+          </p>
         </section>
 
         <section class="settings-card">

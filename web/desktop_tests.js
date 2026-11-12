@@ -185,6 +185,34 @@ console.log("--- 3. DesktopBridge Runtime, Disk Save Sync, Backup & Settings ---
     DesktopBridge.detectRuntime() === "web" && DesktopBridge.isDesktopApp() === false,
     "3.1 DesktopBridge detects 'web' runtime when no native bridge globals are present"
   );
+  assert(
+    DesktopBridge.getSettings().soundEnabled === false &&
+    DesktopBridge.getSettings().soundVolume === 0.3,
+    "3.1.1 Sound feedback is muted by default with a quiet persisted volume level"
+  );
+
+  const repairedRoute = DesktopBridge.normalizeSaveObject({
+    version: CANONICAL_SAVE_VERSION,
+    masterDeck: ["forest"],
+    encounterIdx: 0,
+    inShop: false,
+    route: {
+      loop: 9,
+      currentNodeId: "p2_boss",
+      completedNodeIds: [],
+      visitedNodeIds: ["p1_start", "p2_boss"],
+      pendingSelection: true
+    }
+  });
+  assert(
+    repairedRoute.valid &&
+    repairedRoute.save.route.loop === 0 &&
+    repairedRoute.save.route.currentNodeId === "p1_start" &&
+    repairedRoute.save.route.completedNodeIds.length === 0 &&
+    repairedRoute.save.route.visitedNodeIds.length === 1 &&
+    repairedRoute.save.route.pendingSelection === false,
+    "3.1.1 Desktop save normalization repairs impossible route histories"
+  );
 
   // 3.2 Mock Tauri v2 __TAURI_INTERNALS__ runtime
   let diskSaveData = null;
@@ -322,6 +350,28 @@ console.log("--- 3. DesktopBridge Runtime, Disk Save Sync, Backup & Settings ---
       "3.8 importSavePayload() rejects corrupted JSON and invalid save schemas"
     );
 
+    const generatedReward = sampleGeneratedCreature(state.deckArchetype.colors, 7654321);
+    const generatedCandidate = createCanonicalSavePayload(true);
+    delete generatedCandidate.saveIntegrity;
+    generatedCandidate.masterDeck.push({
+      id: generatedReward.id,
+      generatedDefinition: generatedReward
+    });
+    const generatedCheck = DesktopBridge.normalizeSaveObject(generatedCandidate);
+    state.headless = false;
+    const generatedImport = await DesktopBridge.importSavePayload(JSON.stringify({
+      format: "manastorm-save-backup",
+      version: 1,
+      save: generatedCheck.save
+    }));
+    state.headless = true;
+    assert(
+      generatedCheck.valid &&
+      generatedImport.ok === true &&
+      state.masterDeck.some(card => card.id === generatedReward.id && card.generated === true),
+      "3.8.1 Desktop backup import restores generated creature definition into the active deck"
+    );
+
     // 3.9 Native disk hydration on startup when localStorage is empty
     localStorage.removeItem(SAVE_KEY);
     state.encounterIdx = 0;
@@ -337,6 +387,75 @@ console.log("--- 3. DesktopBridge Runtime, Disk Save Sync, Backup & Settings ---
     );
 
     // 3.10 Desktop Settings & prefersReducedMotion integration
+    await DesktopBridge.updateSettings({ soundEnabled: true, soundVolume: 0.65 });
+    const soundSettingsPersisted = typeof diskSettingsData === "string" &&
+      diskSettingsData.includes('"soundEnabled":true') &&
+      diskSettingsData.includes('"soundVolume":0.65');
+    await DesktopBridge.updateSettings({ soundVolume: 1.5 });
+    const soundVolumeClamped = DesktopBridge.getSettings().soundVolume === 1;
+    await DesktopBridge.updateSettings({ soundEnabled: false, soundVolume: 0.3 });
+    assert(
+      soundSettingsPersisted &&
+      soundVolumeClamped &&
+      DesktopBridge.getSettings().soundEnabled === false,
+      "3.10 Sound opt-in and volume persist, and volume is clamped to its supported range"
+    );
+
+    let audioContextsCreated = 0;
+    let oscillatorsStarted = 0;
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      AudioContext: class {
+        constructor() {
+          audioContextsCreated++;
+          this.state = "suspended";
+          this.currentTime = 0;
+          this.destination = {};
+        }
+        createGain() {
+          return {
+            gain: {
+              value: 0,
+              cancelScheduledValues() {},
+              setTargetAtTime() {},
+              setValueAtTime() {},
+              linearRampToValueAtTime() {},
+              exponentialRampToValueAtTime() {}
+            },
+            connect() {}
+          };
+        }
+        createOscillator() {
+          return {
+            frequency: { setValueAtTime() {} },
+            connect() {},
+            start() { oscillatorsStarted++; },
+            stop() {}
+          };
+        }
+        resume() {
+          this.state = "running";
+          return Promise.resolve();
+        }
+      }
+    };
+    state.headless = false;
+    const mutedCueSuppressed = playSoundCue("cardPlay") === false && audioContextsCreated === 0;
+    await DesktopBridge.updateSettings({ soundEnabled: true });
+    const optedInCueAccepted = playSoundCue("cardPlay") === true;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const enabledCuePlayed = oscillatorsStarted === 1;
+    await DesktopBridge.updateSettings({ soundEnabled: false });
+    const mutedAgain = playSoundCue("manaTap") === false && oscillatorsStarted === 1;
+    state.headless = true;
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    await DesktopBridge.updateSettings({ soundEnabled: false, soundVolume: 0.3 });
+    assert(
+      mutedCueSuppressed && optedInCueAccepted && enabledCuePlayed && mutedAgain,
+      "3.10 Sound stays silent until opted in and immediately respects mute changes"
+    );
+
     delete state.prefersReducedMotion;
     await DesktopBridge.updateSettings({ uiScale: 110, motionMode: "reduced" });
     assert(
@@ -352,6 +471,81 @@ console.log("--- 3. DesktopBridge Runtime, Disk Save Sync, Backup & Settings ---
       prefersReducedMotion() === false,
       "3.10 motionMode='full' overrides prefersReducedMotion() to false"
     );
+
+    await DesktopBridge.updateSettings({ combatSpeed: "normal" });
+    const normalCombatDelay = getCombatAnimationDelay(420);
+    await DesktopBridge.updateSettings({ combatSpeed: "fast" });
+    const fastCombatDelay = getCombatAnimationDelay(420);
+    const fastSettingsPersisted = typeof diskSettingsData === "string" &&
+      diskSettingsData.includes('"combatSpeed":"fast"');
+    await DesktopBridge.updateSettings({ combatSpeed: "instant" });
+    const instantCombatDelay = getCombatAnimationDelay(420);
+    await DesktopBridge.updateSettings({ motionMode: "reduced", combatSpeed: "fast" });
+    const reducedMotionDelay = getCombatAnimationDelay(420);
+    assert(
+      normalCombatDelay === 420 &&
+      fastCombatDelay === 189 &&
+      instantCombatDelay === 0 &&
+      reducedMotionDelay === 0 &&
+      fastSettingsPersisted,
+      "3.10 Combat speed settings persist, scale delays, and Reduced Motion always skips them"
+    );
+
+    const speedTestState = { ...state };
+    const resolveAtSpeed = async (combatSpeed) => {
+      await DesktopBridge.updateSettings({ motionMode: "full", combatSpeed });
+      state.headless = true;
+      state.encounterIdx = 0;
+      state.runOver = false;
+      state.combatLocked = false;
+      state.runTurns = 0;
+      state.turn = 1;
+      state.maxTurns = 5;
+      state.enemyLife = 1000;
+      state.enemyMaxLife = 1000;
+      state.playerLife = 20;
+      state.turnResonance = 1;
+      state.turnBurnPower = 0;
+      state.playerLands = [];
+      state.library = [];
+      state.relics = [];
+      state.playerCreatures = [{
+        uid: "speed-test-attacker",
+        name: "Speed Test Attacker",
+        power: 4,
+        toughness: 4,
+        keywords: [],
+        tempKeywords: [],
+        attacking: true,
+        summoningSick: false,
+        count: 1
+      }];
+      state.enemyCreatures = [{
+        uid: "speed-test-blocker",
+        name: "Speed Test Blocker",
+        power: 1,
+        toughness: 1,
+        keywords: [],
+        frozen: false
+      }];
+      executeCombatAndEndTurn();
+      return {
+        enemyLife: state.enemyLife,
+        playerLife: state.playerLife,
+        turn: state.turn,
+        runTurns: state.runTurns,
+        runOver: state.runOver,
+        playerCreatures: state.playerCreatures.map(creature => creature.name)
+      };
+    };
+    const normalCombatOutcome = await resolveAtSpeed("normal");
+    const instantCombatOutcome = await resolveAtSpeed("instant");
+    assert(
+      JSON.stringify(normalCombatOutcome) === JSON.stringify(instantCombatOutcome),
+      "3.10 Combat presentation speed does not alter combat or turn outcomes"
+    );
+    await DesktopBridge.updateSettings({ motionMode: "full", combatSpeed: "normal" });
+    Object.assign(state, speedTestState);
 
     await DesktopBridge.stepUiScale(1); // 110 -> 120
     assert(DesktopBridge.getSettings().uiScale === 120, "3.11 stepUiScale(1) steps from 110% to 120%");
@@ -549,6 +743,24 @@ console.log("--- 3. DesktopBridge Runtime, Disk Save Sync, Backup & Settings ---
       parsedAfterStale.gold === 25 &&
       parsedDiskAfterStale.encounterIdx === 3,
       "3.21 Stale disk save vs newer localStorage save: reconcileSavesWithDisk keeps newer localStorage progress and updates disk"
+    );
+
+    // 3.22 Preserve both corrupt primary saves and recover from the known-good backup
+    const recoveryBackup = JSON.stringify(knownGoodBeforeCorrupt.save);
+    localStorage.setItem(SAVE_BACKUP_KEY, recoveryBackup);
+    localStorage.setItem(SAVE_KEY, "{corrupt_local_json");
+    diskSaveData = "{corrupt_disk_json";
+    const recBothCorrupt = await DesktopBridge.reconcileSavesWithDisk();
+    const corruptArchive = JSON.parse(localStorage.getItem(SAVE_CORRUPT_KEY));
+    const recoveredPrimary = JSON.parse(localStorage.getItem(SAVE_KEY));
+    const recoveredDisk = JSON.parse(diskSaveData);
+    assert(
+      recBothCorrupt.chosenSource === "backup" &&
+      corruptArchive.records.some(record => record.source === "localStorage" && record.raw === "{corrupt_local_json") &&
+      corruptArchive.records.some(record => record.source === "disk" && record.raw === "{corrupt_disk_json") &&
+      recoveredPrimary.encounterIdx === knownGoodBeforeCorrupt.save.encounterIdx &&
+      recoveredDisk.encounterIdx === knownGoodBeforeCorrupt.save.encounterIdx,
+      "3.22 Corrupt local and disk saves are both preserved while startup restores the known-good backup"
     );
 
     delete globalThis.__TAURI_INTERNALS__;

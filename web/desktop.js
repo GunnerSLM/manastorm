@@ -5,16 +5,21 @@ const DESKTOP_SETTINGS_KEY = "manastorm_settings_v1";
 const CANONICAL_SAVE_VERSION = 1;
 const SAVE_BACKUP_KEY = "manastorm_saved_run_backup_v1";
 const SAVE_CORRUPT_KEY = "manastorm_saved_run_corrupt_v1";
+const MAX_CORRUPT_SAVE_RECORDS = 5;
 
 const DEFAULT_DESKTOP_SETTINGS = {
   uiScale: 100,
   motionMode: "system", // "system" | "full" | "reduced"
+  combatSpeed: "normal",
+  soundEnabled: false,
+  soundVolume: 0.3,
   fullscreen: false,
   confirmQuit: true
 };
 
 const VALID_UI_SCALES = [90, 100, 110, 120];
 const VALID_MOTION_MODES = ["system", "full", "reduced"];
+const VALID_COMBAT_SPEEDS = ["normal", "fast", "instant"];
 
 function getSafeStorage() {
   try {
@@ -36,14 +41,28 @@ function computeSaveChecksum(saveObj) {
     inShop: Boolean(saveObj.inShop),
     archetypeId: String(saveObj.archetypeId || ""),
     encounterIdx: Number(saveObj.encounterIdx) || 0,
+    ...(saveObj.challengeId && saveObj.challengeId !== "standard" ? { challengeId: String(saveObj.challengeId) } : {}),
+    ...(saveObj.campaignId && saveObj.campaignId !== DEFAULT_CAMPAIGN_ID ? { campaignId: String(saveObj.campaignId) } : {}),
+    ...(saveObj.runSeed ? {
+      runSeed: String(saveObj.runSeed),
+      rngState: Number(saveObj.rngState) || (typeof hashRunSeed === "function" ? hashRunSeed(saveObj.runSeed) : 1)
+    } : {}),
+    ...(typeof saveObj.runId === "string" && saveObj.runId.length > 0 ? {
+      runId: String(saveObj.runId),
+      runStartedAt: Number(saveObj.runStartedAt) || 0,
+      runHistoryRecorded: Boolean(saveObj.runHistoryRecorded),
+      runTurns: Math.max(0, Math.floor(Number(saveObj.runTurns) || 0))
+    } : {}),
     playerLife: Number(saveObj.playerLife) || 20,
     gold: Number(saveObj.gold) || 0,
     masterDeck: Array.isArray(saveObj.masterDeck)
       ? saveObj.masterDeck.map(c => ({
           id: c && c.id ? String(c.id) : "",
+          ...(c && c.generatedDefinition ? { generatedDefinition: c.generatedDefinition } : {}),
           foil: (c && c.foil) || null,
           permPowerBonus: Number(c && c.permPowerBonus) || 0,
           permToughnessBonus: Number(c && c.permToughnessBonus) || 0,
+          ...(c && c.evolutionId ? { evolutionId: c.evolutionId } : {}),
           keywords: Array.isArray(c && c.keywords) ? [...c.keywords] : []
         }))
       : [],
@@ -75,12 +94,16 @@ function isValidEncounterSnapshotObject(snap) {
   return true;
 }
 
-function normalizeRouteObject(rawRoute, encounterIdx = 0, inShop = false) {
+function normalizeRouteObject(rawRoute, encounterIdx = 0, inShop = false, campaignId = DEFAULT_CAMPAIGN_ID) {
+  const campaignEncounters = typeof getCampaignEncounters === "function"
+    ? getCampaignEncounters(campaignId)
+    : ENCOUNTERS;
   const encCount =
-    typeof ENCOUNTERS !== "undefined" && Array.isArray(ENCOUNTERS) && ENCOUNTERS.length > 0
-      ? ENCOUNTERS.length
+    Array.isArray(campaignEncounters) && campaignEncounters.length > 0
+      ? campaignEncounters.length
       : 6;
-  const safeEncIdx = Math.max(0, Math.floor(Number(encounterIdx) || 0));
+  const parsedEncIdx = Number(encounterIdx);
+  const safeEncIdx = Number.isFinite(parsedEncIdx) ? Math.max(0, Math.floor(parsedEncIdx)) : 0;
   const defaultLoop = Math.floor(safeEncIdx / encCount);
   const encMod = safeEncIdx % encCount;
 
@@ -94,29 +117,30 @@ function normalizeRouteObject(rawRoute, encounterIdx = 0, inShop = false) {
   ];
   const fallbackEntry = fallbackPathByEnc[encMod] || fallbackPathByEnc[0];
 
-  const isValidNodeId = (id) => {
-    if (typeof id !== "string" || id.length === 0) return false;
-    if (typeof CAMPAIGN_ROUTE_NODES !== "undefined" && Array.isArray(CAMPAIGN_ROUTE_NODES)) {
-      return CAMPAIGN_ROUTE_NODES.some(n => n.id === id);
-    }
-    return true;
-  };
-
-  if (!rawRoute || typeof rawRoute !== "object" || Array.isArray(rawRoute)) {
+  const campaignRouteNodes = typeof getCampaignRouteNodes === "function"
+    ? getCampaignRouteNodes(campaignId)
+    : CAMPAIGN_ROUTE_NODES;
+  const routeNodes = Array.isArray(campaignRouteNodes)
+    ? campaignRouteNodes
+    : null;
+  const nodeById = routeNodes ? new Map(routeNodes.map(node => [node.id, node])) : null;
+  const isValidNodeId = (id) => typeof id === "string" && id.length > 0 && (!nodeById || nodeById.has(id));
+  const fallbackRoute = () => {
     const completed = inShop ? [...fallbackEntry.prior, fallbackEntry.current] : [...fallbackEntry.prior];
     return {
       loop: defaultLoop,
       currentNodeId: fallbackEntry.current,
       completedNodeIds: completed,
       visitedNodeIds: [...fallbackEntry.prior, fallbackEntry.current],
+      pendingEventId: null,
       pendingSelection: Boolean(inShop && encMod < encCount - 1),
       lastActivitySummary: null
     };
-  }
+  };
+  if (!rawRoute || typeof rawRoute !== "object" || Array.isArray(rawRoute)) return fallbackRoute();
 
-  const currentNodeId = isValidNodeId(rawRoute.currentNodeId)
-    ? rawRoute.currentNodeId
-    : fallbackEntry.current;
+  const currentNodeId = rawRoute.currentNodeId;
+  if (!isValidNodeId(currentNodeId)) return fallbackRoute();
   const completedNodeIds = Array.isArray(rawRoute.completedNodeIds)
     ? Array.from(new Set(rawRoute.completedNodeIds.filter(isValidNodeId)))
     : [];
@@ -126,15 +150,34 @@ function normalizeRouteObject(rawRoute, encounterIdx = 0, inShop = false) {
   if (!visitedNodeIds.includes(currentNodeId)) {
     visitedNodeIds.push(currentNodeId);
   }
-  const rawLoop = Number(rawRoute.loop);
-  const loop = Number.isFinite(rawLoop) && rawLoop >= 0 ? Math.floor(rawLoop) : defaultLoop;
+  if (nodeById) {
+    const currentNode = nodeById.get(currentNodeId);
+    const visitedSet = new Set(visitedNodeIds);
+    const completedSet = new Set(completedNodeIds);
+    const validPath = visitedNodeIds[0] === routeNodes[0]?.id &&
+      visitedNodeIds[visitedNodeIds.length - 1] === currentNodeId &&
+      visitedNodeIds.every((id, idx) =>
+        idx === 0 || nodeById.get(visitedNodeIds[idx - 1])?.next?.includes(id)
+      ) &&
+      completedNodeIds.every(id => visitedSet.has(id)) &&
+      visitedNodeIds.slice(0, -1).every(id => completedSet.has(id)) &&
+      currentNode?.encounterIdx === encMod;
+    if (!validPath) return fallbackRoute();
+  }
 
   return {
-    loop,
+    loop: defaultLoop,
     currentNodeId,
     completedNodeIds,
     visitedNodeIds,
-    pendingSelection: Boolean(rawRoute.pendingSelection),
+    pendingEventId: nodeById?.get(currentNodeId)?.type === "event" && !completedNodeIds.includes(currentNodeId)
+      ? currentNodeId
+      : null,
+    pendingSelection: Boolean(
+      rawRoute.pendingSelection &&
+      completedNodeIds.includes(currentNodeId) &&
+      nodeById?.get(currentNodeId)?.next?.some(id => !completedNodeIds.includes(id))
+    ),
     lastActivitySummary: typeof rawRoute.lastActivitySummary === "string" ? rawRoute.lastActivitySummary : null
   };
 }
@@ -192,12 +235,22 @@ function normalizeSaveObject(candidate) {
   for (const item of raw.masterDeck) {
     const cardId = typeof item === "string" ? item : item?.id;
     if (!cardId) continue;
-    if (typeof CARD_DB !== "undefined" && !CARD_DB[cardId]) continue;
+    const generatedDefinition = item && typeof normalizeGeneratedCardDefinition === "function"
+      ? normalizeGeneratedCardDefinition(item.generatedDefinition || item)
+      : null;
+    if (typeof CARD_DB !== "undefined" && !CARD_DB[cardId] &&
+        (!generatedDefinition || generatedDefinition.id !== String(cardId))) continue;
+    const cardDefinition = generatedDefinition || (typeof CARD_DB !== "undefined" ? CARD_DB[cardId] : null);
     normalizedDeck.push({
       id: String(cardId),
+      ...(generatedDefinition ? { generatedDefinition } : {}),
       foil: (item && item.foil) || null,
       permPowerBonus: Number(item && item.permPowerBonus) || 0,
       permToughnessBonus: Number(item && item.permToughnessBonus) || 0,
+      ...(item && typeof isValidCardEvolutionState === "function" &&
+        isValidCardEvolutionState(cardDefinition, item)
+        ? { evolutionId: item.evolutionId }
+        : {}),
       keywords: Array.isArray(item && item.keywords) ? [...item.keywords] : []
     });
   }
@@ -247,6 +300,27 @@ function normalizeSaveObject(candidate) {
   const rawEncIdx = Number(raw.encounterIdx);
   const encounterIdx = Number.isFinite(rawEncIdx) && rawEncIdx >= 0 ? Math.floor(rawEncIdx) : 0;
   const inShop = Boolean(raw.inShop);
+  const challengeId = typeof normalizeRunChallengeId === "function"
+    ? normalizeRunChallengeId(raw.challengeId)
+    : "standard";
+  const campaignId = typeof normalizeCampaignId === "function"
+    ? normalizeCampaignId(raw.campaignId)
+    : DEFAULT_CAMPAIGN_ID;
+  const runSeed = typeof normalizeRunSeed === "function"
+    ? normalizeRunSeed(raw.runSeed)
+    : (typeof raw.runSeed === "string" && raw.runSeed.trim().length <= 64 ? raw.runSeed.trim() || null : null);
+  const rngState = runSeed
+    ? (typeof normalizeSavedRngState === "function"
+      ? normalizeSavedRngState(runSeed, raw.rngState)
+      : (Number(raw.rngState) > 0 ? Number(raw.rngState) >>> 0 : 1))
+    : null;
+  const runId = typeof raw.runId === "string" && raw.runId.length > 0 ? raw.runId.slice(0, 120) : null;
+  const runStartedAt = Number.isFinite(Number(raw.runStartedAt)) && Number(raw.runStartedAt) > 0
+    ? Number(raw.runStartedAt)
+    : 0;
+  const runTurns = Number.isFinite(Number(raw.runTurns)) && Number(raw.runTurns) >= 0
+    ? Math.floor(Number(raw.runTurns))
+    : 0;
 
   const encounterState = !inShop && isValidEncounterSnapshotObject(raw.encounterState)
     ? raw.encounterState
@@ -260,7 +334,7 @@ function normalizeSaveObject(candidate) {
       }
     : null;
 
-  const route = normalizeRouteObject(raw.route, encounterIdx, inShop);
+  const route = normalizeRouteObject(raw.route, encounterIdx, inShop, campaignId);
 
   let pendingDraft = null;
   if (raw.pendingDraft && typeof raw.pendingDraft === "object") {
@@ -268,8 +342,17 @@ function normalizeSaveObject(candidate) {
       ? raw.pendingDraft.choices
       : (Array.isArray(raw.pendingDraft.cards) ? raw.pendingDraft.cards : []);
     const validChoices = rawChoices
-      .map(item => (typeof item === "string" ? item : (item && item.id ? item.id : null)))
-      .filter(id => typeof id === "string" && id.length > 0 && (typeof CARD_DB === "undefined" || CARD_DB[id]));
+      .map(item => {
+        const id = typeof item === "string" ? item : item?.id;
+        const generatedDefinition = item && typeof item === "object" &&
+          typeof normalizeGeneratedCardDefinition === "function"
+          ? normalizeGeneratedCardDefinition(item.generatedDefinition || item)
+          : null;
+        if (typeof id !== "string" || id.length === 0) return null;
+        if (typeof CARD_DB === "undefined" || CARD_DB[id]) return id;
+        return generatedDefinition && generatedDefinition.id === id ? { id, generatedDefinition } : null;
+      })
+      .filter(Boolean);
     if (validChoices.length > 0 || raw.pendingDraft.resolved) {
       const encIdx = Number(raw.pendingDraft.encounterIdx);
       pendingDraft = {
@@ -288,6 +371,15 @@ function normalizeSaveObject(candidate) {
     inShop,
     archetypeId,
     encounterIdx,
+    ...(challengeId !== "standard" ? { challengeId } : {}),
+    ...(campaignId !== DEFAULT_CAMPAIGN_ID ? { campaignId } : {}),
+    ...(runSeed ? { runSeed, rngState } : {}),
+    ...(runId ? {
+      runId,
+      runStartedAt,
+      runHistoryRecorded: Boolean(raw.runHistoryRecorded),
+      runTurns
+    } : {}),
     playerLife,
     gold,
     masterDeck: normalizedDeck,
@@ -483,6 +575,16 @@ const DesktopBridge = (() => {
     if (VALID_MOTION_MODES.includes(raw.motionMode)) {
       base.motionMode = raw.motionMode;
     }
+    if (VALID_COMBAT_SPEEDS.includes(raw.combatSpeed)) {
+      base.combatSpeed = raw.combatSpeed;
+    }
+    if (typeof raw.soundEnabled === "boolean") {
+      base.soundEnabled = raw.soundEnabled;
+    }
+    const soundVolume = Number(raw.soundVolume);
+    if (raw.soundVolume !== null && raw.soundVolume !== "" && Number.isFinite(soundVolume)) {
+      base.soundVolume = Math.round(Math.max(0, Math.min(1, soundVolume)) * 100) / 100;
+    }
     if (typeof raw.fullscreen === "boolean") {
       base.fullscreen = raw.fullscreen;
     }
@@ -575,12 +677,28 @@ const DesktopBridge = (() => {
     const storage = getSafeStorage();
     if (!storage || !rawPayload) return false;
     try {
-      const record = JSON.stringify({
+      const record = {
         source,
         preservedAt: new Date().toISOString(),
         raw: typeof rawPayload === "string" ? rawPayload : JSON.stringify(rawPayload)
-      });
-      storage.setItem(SAVE_CORRUPT_KEY, record);
+      };
+      const previousRaw = storage.getItem(SAVE_CORRUPT_KEY);
+      let records = [];
+      if (previousRaw) {
+        try {
+          const previous = JSON.parse(previousRaw);
+          records = Array.isArray(previous.records)
+            ? previous.records.filter(item => item && typeof item.raw === "string")
+            : (typeof previous.raw === "string" ? [previous] : []);
+        } catch (_) {
+          records = [{ source: "previous-archive", preservedAt: record.preservedAt, raw: previousRaw }];
+        }
+      }
+      records.push(record);
+      storage.setItem(SAVE_CORRUPT_KEY, JSON.stringify({
+        ...record,
+        records: records.slice(-MAX_CORRUPT_SAVE_RECORDS)
+      }));
       return true;
     } catch (_) {
       return false;
