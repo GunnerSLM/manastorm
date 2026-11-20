@@ -1,0 +1,18 @@
+{
+  "name": "manastorm-macos",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MANASTORM — MTG × Balatro Tactical TCG Roguelike (Native macOS Desktop App)",
+  "scripts": {
+    "icons": "node scripts/generate-icons.js",
+    "build:dist": "node scripts/build-dist.js",
+    "build": "node scripts/build-macos-app.js",
+    "build:macos": "node scripts/build-macos-app.js",
+    "open": "open dist-macos/MANASTORM.app",
+    "test": "node tests.js && node adversarial_stress_test.js && node desktop_tests.js",
+    "test:unit": "node tests.js",
+    "test:stress": "node adversarial_stress_test.js",
+    "test:desktop": "node desktop_tests.js",
+    "sim": "node sim.js"
+  }
+}

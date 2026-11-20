@@ -1,1 +1,0 @@
-"""MANASTORM pytest test suite."""
