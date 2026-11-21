@@ -24,6 +24,7 @@
         <span class="run-challenge-badge" id="run-challenge-badge" hidden></span>
         <span class="run-challenge-badge" id="run-campaign-badge" hidden></span>
         <span class="run-challenge-badge" id="run-seed-badge" hidden></span>
+        <div class="run-mutators-bar" id="run-mutators-bar" hidden></div>
         <div class="life-bar-wrap" title="Enemy Boss Life Total">
           <div class="life-bar-ghost" id="enemy-life-ghost"></div>
           <div class="life-bar-fill enemy-life-fill" id="enemy-life-bar"></div>
@@ -93,37 +94,24 @@
         </div>
       </section>
 
-      <!-- Deck / Graveyard / Starter Deck Controls -->
+      <!-- In-Run Zones: Library, Graveyard, Planar Route -->
       <section class="deck-zones-panel">
         <button type="button" class="zone-btn" id="btn-view-library" title="Inspect remaining cards in Library (Shortcut: L)">
-          <span>📚 Library</span>
+          <span>Library</span>
           <strong id="library-count">33</strong>
         </button>
-        <button type="button" class="zone-btn" id="btn-open-card-collection" title="Search the complete card catalog">
-          <span>🗂️ Card Catalog</span>
-        </button>
         <button type="button" class="zone-btn" id="btn-view-graveyard" title="Inspect Graveyard (Shortcut: G)">
-          <span>🪦 Graveyard</span>
+          <span>Graveyard</span>
           <strong id="graveyard-count">0</strong>
         </button>
         <button type="button" class="zone-btn" id="btn-view-route" title="Inspect or choose your path on the Planar Route Map (Shortcut: R)">
-          <span>🗺️ Planar Route</span>
+          <span>Planar Route</span>
           <strong id="route-step-badge">1/7</strong>
-        </button>
-        <button type="button" class="zone-btn" id="btn-run-history" title="Review completed runs">
-          <span>📜 Run History</span>
-        </button>
-        <button type="button" class="zone-btn" id="btn-new-run" title="Start a new run or switch Planeswalker guild">
-          <span>🔄 New Run / Deck</span>
-        </button>
-        <button type="button" class="zone-btn" id="btn-desktop-settings" title="Desktop Display, Fullscreen & Save Manager (Shortcut: ,)">
-          <span>⚙️ Desktop &amp; Saves</span>
-          <strong id="desktop-mode-badge">APP</strong>
         </button>
       </section>
     </aside>
 
-    <!-- MAIN ARENA: Command Zone, Enemy Board, Player Board, Mana Row, Hand -->
+    <!-- MAIN ARENA: Utility Bar, Command Zone, Enemy Board, Player Board, Mana Row, Hand -->
     <main class="battlefield-main">
       <section class="mobile-status-bar" aria-label="Current encounter and turn status">
         <div class="mobile-status-boss">
@@ -143,6 +131,27 @@
           <strong id="mobile-projected-damage">0 DMG</strong>
         </div>
       </section>
+
+      <!-- TOP UTILITY STRIP: Meta & App Navigation -->
+      <nav class="top-utility-bar" aria-label="Archive and app controls">
+        <div class="top-utility-group">
+          <button type="button" class="utility-btn" id="btn-open-card-collection" title="Search the complete card catalog">
+            <span>Card Catalog</span>
+          </button>
+          <button type="button" class="utility-btn" id="btn-run-history" title="Review completed runs">
+            <span>Run History</span>
+          </button>
+        </div>
+        <div class="top-utility-group">
+          <button type="button" class="utility-btn" id="btn-new-run" title="Start a new run or switch Planeswalker guild">
+            <span>New Run / Deck</span>
+          </button>
+          <button type="button" class="utility-btn utility-btn-settings" id="btn-desktop-settings" title="Desktop Display, Fullscreen & Save Manager (Shortcut: ,)">
+            <span>Settings &amp; Saves</span>
+            <strong id="desktop-mode-badge">APP</strong>
+          </button>
+        </div>
+      </nav>
 
       <!-- TOP BAR: Command Zone (5 Relic Slots - Balatro Jokers) + Consumables -->
       <header class="command-zone-bar">
@@ -173,7 +182,7 @@
               Free Mulligan (1)
             </button>
             <button type="button" class="btn-combat" id="btn-combat" title="Resolve your attack and enemy retaliation (Shortcut: Space)">
-              ⚔️ Resolve Attack & End Turn
+              Resolve Attack &amp; End Turn
             </button>
           </div>
         </div>
@@ -184,6 +193,7 @@
         <!-- Enemy Creature Row (Blockers & Attackers) -->
         <div class="board-lane enemy-lane">
           <div class="lane-tag">ENEMY BATTLEFIELD <small>(Blockers assign left-to-right against your largest attackers)</small></div>
+          <div class="enemy-intent-banner" id="enemy-intent-banner" role="status" aria-live="polite" hidden></div>
           <div class="creature-row" id="enemy-creatures">
             <!-- Rendered by JS -->
           </div>
@@ -199,6 +209,7 @@
         <!-- Player Creature Row -->
         <div class="board-lane player-lane">
           <div class="lane-tag">YOUR BATTLEFIELD <small>(Click a ready Creature to toggle Attack • Identical tokens stack)</small></div>
+          <div class="permanents-strip" id="player-permanents" aria-label="Active Enchantments and Artifacts" hidden></div>
           <div class="creature-row" id="player-creatures">
             <!-- Rendered by JS -->
           </div>
@@ -229,13 +240,41 @@
   </div>
 
   <!-- Enlarged Card Preview & Keyword Glossary Inspector -->
-  <aside id="card-hover-inspector" class="card-hover-inspector" aria-live="polite" hidden></aside>
+  <aside id="card-hover-inspector" class="card-hover-inspector" popover="manual" aria-live="polite" hidden></aside>
 
   <!-- Boss Intro Splash Overlay -->
   <div id="boss-intro-splash" class="boss-intro-splash" aria-live="polite" hidden></div>
 
   <!-- Floating Popups Container -->
   <div id="fx-layer" class="fx-layer" popover="manual" aria-hidden="true"></div>
+
+  <!-- MODAL 0A: Plane 1 Overlord Boss Relic Reward -->
+  <dialog id="boss-relic-dialog" class="modal-dialog draft-dialog" closedby="none" aria-labelledby="boss-relic-title">
+    <div class="modal-inner draft-modal">
+      <header class="modal-header">
+        <div>
+          <span class="plane-badge" id="boss-relic-plane-badge">PLANE 1 OVERLORD DEFEATED • BOSS RELIC</span>
+          <h2 id="boss-relic-title">Claim a Boss Relic (Free — 1 of 3)</h2>
+        </div>
+        <div class="shop-gold-pill">Current Gold: <strong id="boss-relic-gold">$10</strong></div>
+      </header>
+
+      <p class="deck-modal-desc" id="boss-relic-desc">
+        Choose 1 high-impact Boss Relic to reshape your run (grants an extra 6th Command Zone slot if full), or skip for +$6 Gold.
+      </p>
+
+      <div class="draft-card-grid boss-relic-grid" id="boss-relic-grid" role="region" aria-label="Boss Relic Choices">
+        <!-- Boss Relics rendered dynamically -->
+      </div>
+
+      <footer class="modal-footer draft-modal-footer">
+        <div class="draft-deck-info">Relics: <strong id="boss-relic-count">1 / 5</strong></div>
+        <button type="button" class="btn-secondary btn-skip-boss-relic" id="btn-skip-boss-relic">
+          Skip Boss Relic (+$6 Gold)
+        </button>
+      </footer>
+    </div>
+  </dialog>
 
   <!-- MODAL 0: Post-Battle Card Draft -->
   <dialog id="draft-dialog" class="modal-dialog draft-dialog" closedby="none" aria-labelledby="draft-title">
@@ -261,7 +300,7 @@
           Deck: <strong id="draft-deck-count">40 Cards</strong>
         </div>
         <button type="button" class="btn-secondary btn-skip-draft" id="btn-skip-draft" autofocus>
-          ⏩ Skip Draft (+$2 Gold)
+          Skip Draft (+$2 Gold)
         </button>
       </footer>
     </div>
@@ -275,15 +314,20 @@
           <span class="plane-badge" id="shop-plane-badge">VICTORY • WARD SHATTERED</span>
           <h2 id="shop-title">The Aether Sanctum</h2>
         </div>
-        <div class="shop-gold-pill">Gold: <strong id="shop-gold">$10</strong></div>
+        <div class="shop-header-pills">
+          <div class="shop-deck-pill" id="shop-deck-summary" title="Current master deck size and Land / Spell split">Deck: <strong>40</strong> <span>(17L / 23S)</span></div>
+          <div class="shop-gold-pill">Gold: <strong id="shop-gold">$10</strong></div>
+        </div>
       </header>
 
       <p class="shop-subtitle" id="shop-reward-summary" aria-live="polite">You earned $6 base reward + $2 unused turn bonus!</p>
 
+      <section class="shop-owned-relics-bar" id="shop-owned-relics-bar" aria-label="Equipped Command Zone Relics" hidden></section>
+
       <div class="shop-grid">
         <!-- Column 1: Command Zone Relics for Sale -->
         <div class="shop-section">
-          <h3>Command Zone Relics (Jokers)</h3>
+          <h3>Command Zone Relics</h3>
           <div class="shop-items" id="shop-relics"></div>
         </div>
 
@@ -301,8 +345,8 @@
       </div>
 
       <footer class="modal-footer">
-        <button type="button" class="btn-secondary" id="btn-reroll-shop">🔄 Reroll Stock ($2)</button>
-        <button type="button" class="btn-combat" id="btn-next-encounter" autofocus>➡️ Enter Next Encounter</button>
+        <button type="button" class="btn-secondary" id="btn-reroll-shop">Reroll Stock ($2)</button>
+        <button type="button" class="btn-combat" id="btn-next-encounter" autofocus>Enter Next Encounter</button>
       </footer>
     </div>
   </dialog>
@@ -317,6 +361,8 @@
         </form>
       </header>
       <p class="deck-modal-desc" id="deck-dialog-desc"></p>
+      <section class="deck-inspector-summary" id="deck-dialog-summary" aria-label="Deck statistics and mana curve" hidden></section>
+      <div class="deck-inspector-tabs" id="deck-dialog-tabs" role="tablist" aria-label="Filter cards by type" hidden></div>
       <div class="deck-card-grid" id="deck-dialog-grid"></div>
     </div>
   </dialog>
@@ -391,6 +437,11 @@
         <select id="run-campaign-select" aria-describedby="run-campaign-desc"></select>
         <p id="run-campaign-desc" aria-live="polite"></p>
       </div>
+      <div class="run-challenge-picker">
+        <label for="run-ascension-select">Ascension Rank</label>
+        <select id="run-ascension-select" aria-describedby="run-ascension-desc"></select>
+        <p id="run-ascension-desc" aria-live="polite"></p>
+      </div>
       <div class="run-challenge-picker run-seed-picker">
         <label for="run-seed-input">Run Seed (optional)</label>
         <div class="run-seed-controls">
@@ -437,14 +488,14 @@
       <header class="modal-header">
         <div>
           <span class="plane-badge" id="victory-badge">PLANE 2 CONQUERED • MULTIVERSE SAVED</span>
-          <h2 id="victory-title">🏆 Planeswalker Ascendant!</h2>
+          <h2 id="victory-title">Planeswalker Ascendant</h2>
         </div>
       </header>
       <p class="deck-modal-desc" id="victory-summary">You shattered Aurelia, the Radiant Arbiter and conquered the Shattered Expanse!</p>
       <div class="victory-stats-grid" id="victory-stats"></div>
       <footer class="modal-footer">
-        <button type="button" class="btn-secondary" id="btn-victory-newrun">🔄 Start a Fresh Run</button>
-        <button type="button" class="btn-combat" id="btn-endless-continue" autofocus>♾️ Enter Endless Loop (2.5× Boss HP)</button>
+        <button type="button" class="btn-secondary" id="btn-victory-newrun">Start a Fresh Run</button>
+        <button type="button" class="btn-combat" id="btn-endless-continue" autofocus>Enter Endless Loop (2.5× Boss HP)</button>
       </footer>
     </div>
   </dialog>
@@ -516,13 +567,13 @@
 
       <div class="settings-sections">
         <section class="settings-card">
-          <h3>🖥️ Display &amp; Window Controls</h3>
+          <h3>Display &amp; Window Controls</h3>
           <div class="settings-row">
             <div class="settings-label-col">
               <strong>Window Mode</strong>
               <small>Toggle native borderless fullscreen (<kbd>F11</kbd> or <kbd>⌃⌘F</kbd>)</small>
             </div>
-            <button type="button" class="btn-secondary" id="btn-toggle-fullscreen">🖥️ Toggle Fullscreen</button>
+            <button type="button" class="btn-secondary" id="btn-toggle-fullscreen">Toggle Fullscreen</button>
           </div>
 
           <div class="settings-row">
@@ -564,7 +615,7 @@
         </section>
 
         <section class="settings-card">
-          <h3>🔊 Optional Sound Feedback</h3>
+          <h3>Audio Feedback</h3>
           <label class="settings-row sound-toggle-row" for="settings-sound-enabled">
             <span class="settings-label-col">
               <strong>Sound Effects</strong>
@@ -587,14 +638,14 @@
         </section>
 
         <section class="settings-card">
-          <h3>💾 Sanctum Save Manager</h3>
+          <h3>Sanctum Save Manager</h3>
           <div class="save-summary-box" id="settings-save-summary">
             Active run automatically saved to local Sanctum storage.
           </div>
           <div class="settings-actions-row">
-            <button type="button" class="btn-secondary" id="btn-export-save">💾 Export Save (.json)</button>
-            <button type="button" class="btn-secondary" id="btn-copy-save">📋 Copy Save JSON</button>
-            <button type="button" class="btn-secondary" id="btn-toggle-import-save">📂 Import Save Backup</button>
+            <button type="button" class="btn-secondary" id="btn-export-save">Export Save (.json)</button>
+            <button type="button" class="btn-secondary" id="btn-copy-save">Copy Save JSON</button>
+            <button type="button" class="btn-secondary" id="btn-toggle-import-save">Import Save Backup</button>
           </div>
           <div class="settings-import-box" id="settings-import-box" hidden>
             <label class="import-file-label" for="input-import-file">
@@ -603,19 +654,20 @@
             <input type="file" id="input-import-file" accept=".json,application/json" />
             <textarea id="textarea-import-save" rows="4" placeholder='{"format":"manastorm-save-backup","version":1,...}'></textarea>
             <div class="settings-actions-row">
-              <button type="button" class="btn-combat" id="btn-confirm-import-save">⚡ Restore Imported Run</button>
+              <button type="button" class="btn-combat" id="btn-confirm-import-save">Restore Imported Run</button>
             </div>
           </div>
           <p class="settings-status-msg" id="settings-status-msg" aria-live="polite" hidden></p>
         </section>
 
         <section class="settings-card">
-          <h3>⌨️ Desktop Hotkeys</h3>
+          <h3>Keyboard Shortcuts</h3>
           <div class="hotkey-grid">
             <div class="hotkey-item"><kbd>1</kbd>–<kbd>9</kbd> <span>Play Card from Hand</span></div>
             <div class="hotkey-item"><kbd>Space</kbd> <span>Resolve Combat &amp; End Turn</span></div>
             <div class="hotkey-item"><kbd>M</kbd> <span>Turn-1 Free Mulligan</span></div>
             <div class="hotkey-item"><kbd>L</kbd> / <kbd>G</kbd> <span>Inspect Library / Graveyard</span></div>
+            <div class="hotkey-item"><kbd>R</kbd> <span>Planar Route Map</span></div>
             <div class="hotkey-item"><kbd>F11</kbd> <span>Toggle Fullscreen</span></div>
             <div class="hotkey-item"><kbd>,</kbd> <span>Desktop &amp; Save Settings</span></div>
           </div>
@@ -623,13 +675,14 @@
       </div>
 
       <footer class="modal-footer">
-        <button type="button" class="btn-secondary" id="btn-settings-newrun">🔄 Start New Run / Switch Deck</button>
-        <button type="button" class="btn-danger" id="btn-quit-desktop">🚪 Save &amp; Quit to Desktop</button>
+        <button type="button" class="btn-secondary" id="btn-settings-newrun">Start New Run / Switch Deck</button>
+        <button type="button" class="btn-danger" id="btn-quit-desktop">Save &amp; Quit to Desktop</button>
       </footer>
     </div>
   </dialog>
 
   <script src="data/cards.js"></script>
+  <script src="data/card_art.js"></script>
   <script src="data/relics.js"></script>
   <script src="mana.js"></script>
   <script src="combat.js"></script>

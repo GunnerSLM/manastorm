@@ -4150,3 +4150,1269 @@ body.page-hidden #relic-slots .relic-card {
   font-size: 0.68rem;
   color: var(--text-muted);
 }
+
+/* === SECTION 1 ADDITIONS: RARITY TIERS, BOSS RELICS, PERMANENTS, TELEGRAPHS, MUTATORS & MASTERY === */
+.relic-rarity-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.relic-rarity-badge.rarity-common {
+  background: rgba(164, 176, 190, 0.16);
+  color: #cfd8e3;
+  border: 1px solid rgba(164, 176, 190, 0.35);
+}
+.relic-rarity-badge.rarity-uncommon {
+  background: rgba(89, 162, 255, 0.16);
+  color: #8cc2ff;
+  border: 1px solid rgba(89, 162, 255, 0.4);
+}
+.relic-rarity-badge.rarity-rare {
+  background: rgba(177, 140, 255, 0.18);
+  color: #d3bdff;
+  border: 1px solid rgba(177, 140, 255, 0.45);
+}
+.relic-rarity-badge.rarity-boss {
+  background: rgba(255, 190, 59, 0.2);
+  color: #ffd978;
+  border: 1px solid rgba(255, 190, 59, 0.55);
+}
+.relic-card.relic-rarity-boss,
+.shop-item-card.relic-rarity-boss,
+.boss-relic-choice-card {
+  border-color: rgba(255, 190, 59, 0.55);
+  box-shadow: 0 0 14px rgba(255, 190, 59, 0.14);
+}
+.enemy-intent-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 5px 10px;
+  margin: 4px 0 6px;
+  border-radius: 8px;
+  background: rgba(18, 22, 34, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.76rem;
+}
+.intent-headline {
+  color: #dce4f4;
+  font-weight: 600;
+}
+.intent-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.intent-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+.intent-pill.intent-danger {
+  background: rgba(255, 71, 87, 0.22);
+  color: #ff8a95;
+  border: 1px solid rgba(255, 71, 87, 0.5);
+}
+.intent-pill.intent-warning {
+  background: rgba(255, 190, 59, 0.18);
+  color: #ffd978;
+  border: 1px solid rgba(255, 190, 59, 0.45);
+}
+.intent-pill.intent-info {
+  background: rgba(89, 162, 255, 0.16);
+  color: #9ecbff;
+  border: 1px solid rgba(89, 162, 255, 0.35);
+}
+.permanents-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 8px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: rgba(24, 30, 48, 0.75);
+  border: 1px solid rgba(177, 140, 255, 0.28);
+}
+.permanents-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #b18cff;
+}
+.permanent-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  background: rgba(15, 19, 30, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #f3f6ff;
+}
+.run-mutators-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+.mutator-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  background: rgba(255, 159, 67, 0.16);
+  color: #ffc580;
+  border: 1px solid rgba(255, 159, 67, 0.4);
+}
+.mutator-pill.mutator-ascension {
+  background: rgba(177, 140, 255, 0.2);
+  color: #decbff;
+  border-color: rgba(177, 140, 255, 0.5);
+}
+.starter-deck-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+}
+.starter-mastery-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  background: rgba(255, 190, 59, 0.2);
+  color: #ffd978;
+  border: 1px solid rgba(255, 190, 59, 0.5);
+}
+
+/* ============================================================================
+   TABLETOP ARTCRAFT OVERHAUL — OBSIDIAN, PARCHMENT & BURNISHED BRASS
+   Replaces generic neon/indigo SaaS styling with handcrafted dark-fantasy TCG craft
+   ============================================================================ */
+
+:root {
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  --bg-deep: #100e0d;
+  --bg-panel: #171513;
+  --bg-panel-alt: #1d1a17;
+  --bg-inset: #110f0d;
+  --bg-lane: rgba(23, 20, 18, 0.86);
+
+  --border-subtle: rgba(218, 196, 155, 0.13);
+  --border-strong: rgba(218, 196, 155, 0.24);
+  --border-highlight: rgba(214, 174, 98, 0.62);
+
+  --text-main: #ede6d8;
+  --text-muted: #9c9284;
+  --text-dim: #746b5e;
+
+  --brass: #cfa558;
+  --brass-bright: #e9cf97;
+  --power-blue: #467eb5;
+  --mult-red: #b83b36;
+  --gold-amber: #d4aa5b;
+  --emerald-ok: #469c6d;
+
+  /* Authentic Muted Ink-and-Parchment Card Frames */
+  --mtg-G: #2f7a4d;
+  --mtg-G-bg: linear-gradient(165deg, #1b3123 0%, #101d15 100%);
+  --mtg-R: #b84435;
+  --mtg-R-bg: linear-gradient(165deg, #3a1c18 0%, #200f0d 100%);
+  --mtg-B: #7c5aa8;
+  --mtg-B-bg: linear-gradient(165deg, #251c2e 0%, #141019 100%);
+  --mtg-U: #3c78ad;
+  --mtg-U-bg: linear-gradient(165deg, #162838 0%, #0d1721 100%);
+  --mtg-W: #c8b279;
+  --mtg-W-bg: linear-gradient(165deg, #353023 0%, #1e1b14 100%);
+  --mtg-C: #8c887f;
+  --mtg-C-bg: linear-gradient(165deg, #272522 0%, #161513 100%);
+  --mtg-L: #9b8463;
+  --mtg-L-bg: linear-gradient(165deg, #2c241b 0%, #191510 100%);
+}
+
+/* Woven Obsidian Felt Tabletop Surface (zero neon haze) */
+body {
+  font-family: var(--font-sans);
+  color: var(--text-main);
+  background-color: var(--bg-deep);
+  background-image:
+    radial-gradient(ellipse at 54% 38%, rgba(48, 40, 32, 0.42) 0%, rgba(16, 14, 13, 0.96) 72%),
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 245, 225, 0.012) 0px,
+      rgba(255, 245, 225, 0.012) 1px,
+      transparent 1px,
+      transparent 4px
+    );
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Editorial Serif Display & Tabular Numerals */
+.brand-title,
+.boss-name,
+.card-title,
+.draft-card-title,
+.relic-name,
+.shop-item-name,
+.modal-header h2,
+.shop-section h3,
+.settings-card h3,
+.starter-deck-box h3 {
+  font-family: var(--font-display);
+  letter-spacing: 0.015em;
+}
+
+.math-val,
+.stat-chip strong,
+.pt-box,
+.life-bar-text,
+.shop-gold-pill strong,
+.zone-btn strong {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Sidebar Shell */
+.hud-sidebar {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  box-shadow:
+    inset 0 1px 0 rgba(245, 232, 205, 0.06),
+    0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+/* Kill rainbow gradient text — replace with chiseled gold-leaf nameplate */
+.brand-banner {
+  background: linear-gradient(180deg, #1f1b17 0%, #151210 100%);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 11px 12px 9px;
+  position: relative;
+  box-shadow: inset 0 1px 0 rgba(233, 207, 151, 0.12);
+}
+
+.brand-banner::after {
+  content: "";
+  display: block;
+  width: 48%;
+  height: 1px;
+  margin: 6px auto 0;
+  background: linear-gradient(90deg, transparent, rgba(207, 165, 88, 0.55), transparent);
+}
+
+.brand-title {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: var(--brass-bright);
+  font-size: 1.28rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+
+.brand-subtitle {
+  font-family: var(--font-sans);
+  font-size: 0.64rem;
+  letter-spacing: 0.16em;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+/* Boss Panel — Grounded, No Idle Pulsing */
+.boss-panel {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--brass);
+  border-radius: 4px;
+  animation: none !important;
+  box-shadow: inset 0 1px 0 rgba(245, 232, 205, 0.05);
+}
+
+.plane-badge {
+  font-family: var(--font-sans);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  color: var(--brass-bright);
+  background: rgba(207, 165, 88, 0.1);
+  border: 1px solid rgba(207, 165, 88, 0.3);
+  border-radius: 3px;
+  padding: 2px 6px;
+}
+
+.boss-name {
+  font-size: 1.08rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 6px 0 3px;
+}
+
+.boss-rule {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.38;
+}
+
+.run-challenge-badge {
+  border-radius: 3px;
+  border-color: rgba(207, 165, 88, 0.34);
+  background: rgba(207, 165, 88, 0.08);
+  color: var(--brass-bright);
+  font-weight: 700;
+}
+
+.life-bar-wrap {
+  height: 24px;
+  background: var(--bg-inset);
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
+}
+
+.life-bar-fill {
+  background: linear-gradient(180deg, #b83b36 0%, #83221f 100%);
+}
+
+/* Combat Engine Counter — Brass & Enamel Instrument */
+.math-box {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  padding: 10px;
+  box-shadow: inset 0 1px 0 rgba(245, 232, 205, 0.05);
+}
+
+.math-header {
+  font-size: 0.63rem;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+}
+
+.math-pill {
+  border-radius: 4px;
+  padding: 6px 5px;
+}
+
+.power-pill {
+  background: linear-gradient(180deg, #27486b 0%, #1a3048 100%);
+  border: 1px solid rgba(114, 163, 212, 0.45);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.mult-pill {
+  background: linear-gradient(180deg, #7d2522 0%, #521614 100%);
+  border: 1px solid rgba(212, 106, 100, 0.48);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.math-val {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: #f8f4ec;
+}
+
+.math-preview strong {
+  color: var(--brass-bright);
+}
+
+/* Player Stats & Mana Pool */
+.player-stats-panel {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+}
+
+.stat-chip {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+
+.life-chip strong { color: #67bd8c; }
+.turn-chip strong { color: #8cb7e3; }
+.gold-chip strong { color: var(--brass-bright); }
+
+.mana-pool-box {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+
+.land-drop-status {
+  color: var(--brass-bright);
+  background: rgba(207, 165, 88, 0.1);
+  border: 1px solid rgba(207, 165, 88, 0.28);
+  border-radius: 3px;
+}
+
+.mana-pip {
+  border-radius: 3px;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+/* Sidebar Navigation Buttons — Tactile Embossed Tabs */
+.zone-btn {
+  background: #1b1815;
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid transparent;
+  border-radius: 4px;
+  padding: 7px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  transition: background 0.14s, border-color 0.14s, color 0.14s;
+}
+
+.zone-btn:hover {
+  background: #24201c;
+  border-color: var(--border-strong);
+  border-left-color: var(--brass);
+  color: var(--brass-bright);
+}
+
+/* Battlefield Arena — Remove Ambient Haze Pulse */
+.battlefield-main::before {
+  display: none;
+}
+
+/* Command Zone Bar */
+.command-zone-bar {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  box-shadow: inset 0 1px 0 rgba(245, 232, 205, 0.05);
+}
+
+.zone-label {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--brass);
+}
+
+.relic-card {
+  background: linear-gradient(175deg, #231f1a 0%, #151310 100%);
+  border: 1px solid rgba(207, 165, 88, 0.34);
+  border-radius: 5px;
+  animation: none !important;
+  box-shadow:
+    inset 0 1px 0 rgba(233, 207, 151, 0.12),
+    0 3px 8px rgba(0, 0, 0, 0.45);
+}
+
+.relic-card:hover {
+  border-color: rgba(233, 207, 151, 0.6);
+  box-shadow:
+    inset 0 1px 0 rgba(233, 207, 151, 0.2),
+    0 6px 14px rgba(0, 0, 0, 0.55);
+}
+
+.relic-name {
+  font-size: 0.79rem;
+  font-weight: 700;
+  color: var(--brass-bright);
+}
+
+.relic-desc {
+  color: #c5bdb0;
+}
+
+.relic-empty-slot,
+.consumable-empty-slot {
+  border: 1px dashed rgba(218, 196, 155, 0.16);
+  border-radius: 5px;
+  color: var(--text-dim);
+  background: rgba(16, 14, 13, 0.35);
+}
+
+.consumable-card {
+  background: linear-gradient(175deg, #231d19 0%, #151210 100%);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+}
+
+.phase-indicator {
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--brass-bright);
+  background: rgba(207, 165, 88, 0.1);
+  border: 1px solid rgba(207, 165, 88, 0.32);
+  border-radius: 3px;
+}
+
+/* Buttons — Forged Brass & Crimson Wax Seal */
+.btn-secondary {
+  background: linear-gradient(180deg, #25211d 0%, #1a1714 100%);
+  color: var(--text-main);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 248, 232, 0.07);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #2f2a24 0%, #221e1a 100%);
+  border-color: rgba(207, 165, 88, 0.45);
+}
+
+.btn-combat {
+  background: linear-gradient(180deg, #b83a34 0%, #86231e 100%);
+  color: #fbf7ef;
+  border: 1px solid #d46a63;
+  border-radius: 4px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 224, 210, 0.22),
+    0 3px 10px rgba(0, 0, 0, 0.48);
+}
+
+.btn-combat:hover:not(:disabled) {
+  filter: brightness(1.08);
+  border-color: var(--brass-bright);
+}
+
+/* Battlefield Lanes — Architectural Table Zones */
+.board-lane {
+  background: var(--bg-lane);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  box-shadow: inset 0 1px 0 rgba(245, 232, 205, 0.04);
+}
+
+.enemy-lane {
+  border-color: rgba(184, 59, 54, 0.28);
+  background: linear-gradient(180deg, rgba(44, 20, 19, 0.42) 0%, rgba(22, 19, 17, 0.84) 100%);
+}
+
+.player-lane {
+  border-color: rgba(207, 165, 88, 0.2);
+}
+
+.land-lane {
+  border-color: rgba(155, 132, 99, 0.24);
+  background: rgba(18, 16, 14, 0.9);
+}
+
+.lane-tag {
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+.combat-log-strip {
+  background: #13110f;
+  border: 1px solid rgba(207, 165, 88, 0.26);
+  border-radius: 4px;
+  color: #e5d5b3;
+  font-size: 0.77rem;
+}
+
+/* Physical Printed Card Frames (Board, Land, Hand) */
+.board-card,
+.hand-card,
+.draft-card {
+  border-radius: 6px;
+  border-width: 1.5px;
+  box-shadow:
+    inset 0 0 0 1px rgba(238, 222, 188, 0.12),
+    0 5px 12px rgba(0, 0, 0, 0.55);
+}
+
+.board-card.attacking {
+  border-color: #d4524a;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 210, 190, 0.25),
+    0 8px 18px rgba(0, 0, 0, 0.62),
+    0 0 0 1px rgba(212, 82, 74, 0.45);
+}
+
+.card-color-G { background: var(--mtg-G-bg); border-color: #428559; }
+.card-color-R { background: var(--mtg-R-bg); border-color: #b54d3f; }
+.card-color-B { background: var(--mtg-B-bg); border-color: #7c5fa3; }
+.card-color-U { background: var(--mtg-U-bg); border-color: #467eb0; }
+.card-color-W { background: var(--mtg-W-bg); border-color: #bfa974; }
+.card-color-C { background: var(--mtg-C-bg); border-color: #827e75; }
+.card-color-L { background: var(--mtg-L-bg); border-color: #9e8662; }
+
+.card-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #f4eee1;
+}
+
+.card-rules {
+  color: #cfc7b8;
+}
+
+.pt-box {
+  background: #110f0d;
+  border: 1px solid rgba(218, 196, 155, 0.42);
+  border-radius: 3px;
+  color: #f5efe2;
+  font-weight: 800;
+}
+
+.status-pill {
+  border-radius: 3px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.status-attack { background: #a8332e; color: #fff6f2; }
+.status-ready { background: rgba(70, 156, 109, 0.22); color: #8cdbb0; border: 1px solid rgba(70, 156, 109, 0.35); }
+.status-sick { background: rgba(156, 146, 132, 0.14); color: #b5aca0; }
+.status-blocker { background: rgba(207, 165, 88, 0.18); color: #e9cf97; border: 1px solid rgba(207, 165, 88, 0.32); }
+
+.land-card {
+  border-radius: 5px;
+  border-color: rgba(218, 196, 155, 0.26);
+  box-shadow:
+    inset 0 0 0 1px rgba(238, 222, 188, 0.08),
+    0 3px 8px rgba(0, 0, 0, 0.45);
+}
+
+.land-card.land-enhanced {
+  border-color: rgba(214, 174, 98, 0.72);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
+}
+
+/* Hand Tray */
+.hand-footer {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+
+.archetype-badge {
+  color: var(--brass-bright);
+  background: rgba(207, 165, 88, 0.1);
+  border: 1px solid rgba(207, 165, 88, 0.3);
+  border-radius: 3px;
+  font-weight: 700;
+}
+
+/* Modals — Dark-Bound Grimoire Panels */
+dialog {
+  background: #171513;
+  color: var(--text-main);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow:
+    inset 0 1px 0 rgba(245, 232, 205, 0.08),
+    0 24px 64px rgba(0, 0, 0, 0.78);
+}
+
+dialog::backdrop {
+  background: rgba(8, 7, 6, 0.78);
+}
+
+.modal-header {
+  border-bottom-color: var(--border-subtle);
+}
+
+.modal-header h2 {
+  color: var(--brass-bright);
+  font-weight: 700;
+}
+
+.shop-section,
+.settings-card,
+.starter-deck-box,
+.shop-item-card {
+  background: #1c1916;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+}
+
+.starter-deck-box:hover:not(:disabled),
+.shop-item-card:hover {
+  border-color: rgba(207, 165, 88, 0.45);
+}
+
+.shop-gold-pill {
+  background: var(--bg-inset);
+  border: 1px solid rgba(207, 165, 88, 0.36);
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+
+.shop-gold-pill strong {
+  color: var(--brass-bright);
+}
+
+.btn-buy {
+  background: linear-gradient(180deg, #c69c4c 0%, #96722d 100%);
+  color: #15120d;
+  border: 1px solid #e6c785;
+  border-radius: 4px;
+  font-weight: 800;
+}
+
+.btn-close {
+  background: #231f1b;
+  color: var(--text-main);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+
+.btn-close:hover {
+  background: #2e2924;
+  border-color: var(--brass);
+}
+
+.enemy-intent-banner,
+.permanents-strip {
+  border-radius: 4px;
+  background: rgba(17, 15, 13, 0.85);
+  border-color: var(--border-subtle);
+}
+
+.intent-pill,
+.mutator-pill,
+.relic-rarity-badge,
+.starter-mastery-badge {
+  border-radius: 3px;
+}
+
+.permanent-pill {
+  border-radius: 4px;
+  background: #1b1815;
+  border-color: var(--border-strong);
+}
+
+.synergy-box {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+}
+
+.ladder-node {
+  border-radius: 3px;
+}
+
+/* === ENGRAVED CARD EMBLEMS & ART WINDOWS === */
+.card-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+}
+
+.card-icon-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  background: rgba(12, 10, 9, 0.72);
+  border: 1px solid rgba(218, 196, 155, 0.36);
+  color: var(--brass-bright);
+  padding: 2px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 245, 220, 0.08);
+}
+
+.card-icon-badge.has-card-art-img {
+  padding: 0;
+}
+
+.card-icon-badge svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.card-icon-badge-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 22%;
+  display: block;
+  pointer-events: none;
+}
+
+/* Shared MTG Card Art Frame & Scryfall Image Layer */
+.card-art-frame {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 3px;
+  border: 1px solid rgba(218, 196, 155, 0.28);
+  background:
+    radial-gradient(ellipse at 50% 45%, rgba(233, 207, 151, 0.12) 0%, rgba(12, 10, 9, 0.9) 82%);
+  box-shadow: inset 0 1px 5px rgba(0, 0, 0, 0.72);
+  flex-shrink: 0;
+}
+
+.card-art-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 22%;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  z-index: 1;
+}
+
+.card-art-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  background:
+    linear-gradient(180deg, rgba(8, 7, 6, 0.14) 0%, rgba(8, 7, 6, 0) 32%, rgba(8, 7, 6, 0.34) 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 244, 218, 0.08);
+}
+
+.card-art-frame.art-mode-hand {
+  height: 56px;
+  margin: 4px 0 3px;
+}
+
+.card-art-frame.art-mode-hand .card-art-svg {
+  width: 28px;
+  height: 28px;
+  color: var(--brass-bright);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
+}
+
+.card-art-frame.art-mode-board {
+  height: 46px;
+  margin: 3px 0 2px;
+}
+
+.card-art-frame.art-mode-board .card-art-svg {
+  width: 24px;
+  height: 24px;
+  color: var(--brass-bright);
+}
+
+.card-art-frame.art-mode-land {
+  height: 36px;
+  margin: 3px 0 2px;
+}
+
+.card-art-frame.art-mode-land .card-art-svg {
+  width: 22px;
+  height: 22px;
+  color: var(--brass-bright);
+}
+
+.card-art-frame.art-mode-draft {
+  height: 92px;
+  margin: 6px 0 5px;
+  border-radius: 4px;
+  border-color: rgba(218, 196, 155, 0.34);
+}
+
+.card-art-frame.art-mode-draft .card-art-svg {
+  width: 38px;
+  height: 38px;
+  color: var(--brass-bright);
+}
+
+.card-art-frame.art-mode-inspector {
+  height: 122px;
+  margin: 6px 0 6px;
+  border-radius: 4px;
+  border-color: rgba(218, 196, 155, 0.36);
+}
+
+.card-art-frame.art-mode-inspector .card-art-svg {
+  width: 44px;
+  height: 44px;
+  color: var(--brass-bright);
+}
+
+/* Give card frames comfortable room for MTG art crops */
+.board-card {
+  height: auto;
+  min-height: 138px;
+}
+
+.hand-card {
+  height: 168px;
+}
+
+.land-card {
+  height: auto;
+  min-height: 96px;
+}
+
+/* Color-harmonized engraved emblem tints */
+.card-color-G .card-icon-badge,
+.card-color-G .card-art-svg { color: #8ad4a4; }
+.card-color-R .card-icon-badge,
+.card-color-R .card-art-svg { color: #e8907d; }
+.card-color-B .card-icon-badge,
+.card-color-B .card-art-svg { color: #c4a4e8; }
+.card-color-U .card-icon-badge,
+.card-color-U .card-art-svg { color: #8ec1eb; }
+.card-color-W .card-icon-badge,
+.card-color-W .card-art-svg { color: #f0dfb0; }
+.card-color-C .card-icon-badge,
+.card-color-C .card-art-svg { color: #cbc6bc; }
+.card-color-L .card-icon-badge,
+.card-color-L .card-art-svg { color: #dfc596; }
+
+/* ============================================================================
+   LAYOUT, MODALS & INFORMATION HIERARCHY UPGRADES
+   ============================================================================ */
+
+/* Top Utility Bar (Meta & App Controls moved out of Left Sidebar) */
+.top-utility-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  box-shadow: inset 0 1px 0 rgba(245, 232, 205, 0.05);
+  flex-shrink: 0;
+}
+
+.top-utility-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.utility-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  background: #1b1815;
+  color: var(--text-main);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: background 0.14s, border-color 0.14s, color 0.14s;
+}
+
+.utility-btn:hover {
+  background: #24201c;
+  border-color: var(--border-strong);
+  color: var(--brass-bright);
+}
+
+.utility-btn-settings {
+  border-color: rgba(207, 165, 88, 0.28);
+}
+
+/* Hover Inspector Popover Top-Layer Reset (renders cleanly above open modals) */
+.card-hover-inspector[popover] {
+  position: fixed;
+  inset: auto;
+  top: 60px;
+  right: 18px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-main);
+  overflow: visible;
+  pointer-events: none;
+}
+
+.card-hover-inspector[popover].dock-left {
+  right: auto;
+  left: 18px;
+}
+
+.card-hover-inspector[popover]:not(:popover-open) {
+  display: none;
+}
+
+.card-hover-inspector[popover]:popover-open {
+  display: flex;
+}
+
+.permanent-pill {
+  cursor: help;
+}
+
+/* Shop Header Deck Pill & Equipped Relics Bar */
+.shop-header-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.shop-deck-pill {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.18));
+  padding: 6px 12px;
+  border-radius: 99px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.shop-deck-pill strong {
+  color: var(--text-main);
+}
+
+.shop-owned-relics-bar {
+  background: rgba(13, 17, 28, 0.72);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.shop-owned-relics-bar.is-full {
+  border-color: rgba(207, 165, 88, 0.5);
+  background: rgba(34, 27, 18, 0.55);
+}
+
+.shop-owned-relics-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.shop-owned-relics-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.shop-owned-relic-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px 4px 10px;
+  border-radius: 5px;
+  background: linear-gradient(175deg, #231f1a 0%, #151310 100%);
+  border: 1px solid rgba(207, 165, 88, 0.34);
+  font-size: 0.75rem;
+  cursor: help;
+}
+
+.shop-owned-relic-name {
+  font-weight: 700;
+  color: var(--brass-bright, #ffe299);
+}
+
+.shop-owned-relic-sell {
+  background: rgba(196, 69, 69, 0.22);
+  color: #ffc5c5;
+  border: 1px solid rgba(255, 118, 118, 0.38);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.14s, border-color 0.14s;
+}
+
+.shop-owned-relic-sell:hover {
+  background: rgba(214, 66, 50, 0.42);
+  border-color: rgba(255, 150, 140, 0.68);
+  color: #fff;
+}
+
+/* Upgraded Library / Graveyard Deck Inspector */
+.deck-inspector-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: rgba(13, 17, 28, 0.78);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+
+.deck-stats-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.deck-stat-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 4px;
+  background: #1b1815;
+  border: 1px solid var(--border-subtle);
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.deck-stat-pill strong {
+  color: var(--text-main);
+  font-size: 0.8rem;
+}
+
+.deck-stat-pill small {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.deck-mana-curve {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.deck-mana-curve-title {
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--brass, var(--gold-amber));
+  align-self: center;
+}
+
+.mana-curve-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+}
+
+.mana-curve-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 22px;
+}
+
+.mana-curve-count {
+  font-size: 0.62rem;
+  font-weight: 800;
+  color: var(--text-main);
+  min-height: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mana-curve-bar-track {
+  width: 14px;
+  height: 34px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+}
+
+.mana-curve-bar-fill {
+  width: 100%;
+  background: linear-gradient(180deg, var(--brass-bright, #ffbe3b) 0%, #9b7430 100%);
+  border-radius: 2px 2px 0 0;
+}
+
+.mana-curve-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.deck-inspector-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.deck-filter-tab {
+  padding: 5px 11px;
+  border-radius: 5px;
+  border: 1px solid var(--border-subtle);
+  background: #1b1815;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.14s, border-color 0.14s, color 0.14s;
+}
+
+.deck-filter-tab:hover {
+  background: #24201c;
+  color: var(--text-main);
+}
+
+.deck-filter-tab.active {
+  background: rgba(207, 165, 88, 0.18);
+  border-color: var(--brass, var(--gold-amber));
+  color: var(--brass-bright, #ffe299);
+}
+
+.deck-inspector-card {
+  cursor: default;
+  height: auto;
+  min-height: 186px;
+  position: relative;
+}
+
+.deck-copy-badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  z-index: 6;
+}
+
+@media (max-width: 768px) {
+  .top-utility-bar {
+    flex-wrap: wrap;
+    padding: 6px 8px;
+  }
+
+  .deck-inspector-summary {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

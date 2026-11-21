@@ -35,6 +35,7 @@ const state = {
   graveyard: [],
   playerLands: [],
   playerCreatures: [],
+  playerPermanents: [],
   enemyCreatures: [],
   relics: [],
   consumables: [],
@@ -72,8 +73,10 @@ const state = {
   synTiers: {},
   challengeId: "standard",
   campaignId: DEFAULT_CAMPAIGN_ID,
+  ascensionLevel: 0,
   route: null,
   pendingDraft: null,
+  pendingBossRelic: null,
   lastSaveError: null
 };
 
@@ -251,7 +254,8 @@ function getDefaultGameProfile() {
     version: GAME_PROFILE_VERSION,
     unlockedStarterDeckIds: [...UNLOCKED_STARTER_DECK_IDS],
     campaignClears: 0,
-    processedVictoryRunIds: []
+    processedVictoryRunIds: [],
+    deckMastery: {}
   };
 }
 
@@ -302,6 +306,17 @@ function normalizeGameProfile(raw) {
     else unlocked.add(deckId);
   }
 
+  const rawMastery = raw.deckMastery && typeof raw.deckMastery === "object" && !Array.isArray(raw.deckMastery)
+    ? raw.deckMastery
+    : {};
+  const deckMastery = {};
+  for (const [dId, rank] of Object.entries(rawMastery)) {
+    if (STARTER_DECKS.some(d => d.id === dId)) {
+      const safeRank = Math.max(0, Math.min(5, Math.floor(Number(rank) || 0)));
+      if (safeRank > 0) deckMastery[dId] = safeRank;
+    }
+  }
+
   return {
     ok: true,
     migrated,
@@ -311,7 +326,8 @@ function normalizeGameProfile(raw) {
       campaignClears,
       processedVictoryRunIds: processedRunIds
         .filter(runId => typeof runId === "string" && runId.length > 0 && runId.length <= 120)
-        .slice(-MAX_PROFILE_RUN_IDS)
+        .slice(-MAX_PROFILE_RUN_IDS),
+      deckMastery
     }
   };
 }
@@ -390,6 +406,39 @@ function getStarterDeckProgressMessage() {
   return `Campaign clears: ${progress}/${requirement.campaignClears} — ${requirement.description} to unlock ${deck?.name || deckId}.`;
 }
 
+function getDeckMasteryRank(deckId) {
+  const res = readGameProfile();
+  if (!res.ok || !res.profile || !res.profile.deckMastery) return 0;
+  return Number(res.profile.deckMastery[deckId]) || 0;
+}
+
+function getMaxUnlockedAscension() {
+  const res = readGameProfile();
+  const clears = res.ok && res.profile ? (res.profile.campaignClears || 0) : 0;
+  const maxLvl = typeof ASCENSION_LEVELS !== "undefined" ? ASCENSION_LEVELS.length - 1 : 0;
+  return Math.max(0, Math.min(maxLvl, clears));
+}
+
+function getCurrentEndlessLoop() {
+  const encounters = getActiveCampaignEncounters();
+  const count = encounters.length || 6;
+  return Math.max(0, Math.floor(state.encounterIdx / count));
+}
+
+function getShopRerollCost() {
+  let cost = 2;
+  const mutators = typeof getActiveEndlessMutators === "function"
+    ? getActiveEndlessMutators(getCurrentEndlessLoop())
+    : [];
+  if (mutators.some(m => m.id === "aether_inflation")) {
+    cost += 1;
+  }
+  if (typeof getRelicShopRerollPenalty === "function") {
+    cost += getRelicShopRerollPenalty();
+  }
+  return cost;
+}
+
 function recordCampaignClear(runId = state.runId) {
   const existing = readGameProfile();
   if (!existing.ok) {
@@ -404,13 +453,20 @@ function recordCampaignClear(runId = state.runId) {
     return { ok: true, duplicate: true };
   }
 
+  const deckId = state.deckArchetype?.id;
+  const nextMastery = { ...(existing.profile.deckMastery || {}) };
+  if (deckId && STARTER_DECKS.some(d => d.id === deckId)) {
+    nextMastery[deckId] = Math.min(5, (Number(nextMastery[deckId]) || 0) + 1);
+  }
+
   const nextProfile = {
     ...existing.profile,
     campaignClears: existing.profile.campaignClears + 1,
     processedVictoryRunIds: [
       ...existing.profile.processedVictoryRunIds,
       ...(runId ? [runId] : [])
-    ].slice(-MAX_PROFILE_RUN_IDS)
+    ].slice(-MAX_PROFILE_RUN_IDS),
+    deckMastery: nextMastery
   };
   let newlyUnlockedDeckId = null;
   for (const [deckId, requirement] of Object.entries(STARTER_DECK_UNLOCK_REQUIREMENTS)) {
@@ -516,6 +572,15 @@ function gainLife(amount, sourceLabel = "Heal") {
 
 function pushToGraveyard(card) {
   state.graveyard.push(card);
+  if (card && card.type === "Creature" && Array.isArray(state.playerPermanents)) {
+    state.playerPermanents.forEach(p => {
+      if (p && p.permanentEffect === "altar_of_ash") {
+        addResonance(1, "Ashvein Altar");
+        addBurnPower(2, "Ashvein Altar");
+        spawnFx("Ashvein Altar: +1 Mult & +2 Burn!", "#a4b0be");
+      }
+    });
+  }
   dispatchRelicEvent("onGraveyardEnter", { card });
 }
 
@@ -1050,6 +1115,12 @@ function startNewRun(
   state.deckArchetype = deckConfig;
   state.challengeId = challenge.id;
   state.campaignId = campaign.id;
+  state.ascensionLevel = typeof normalizeAscensionLevel === "function"
+    ? normalizeAscensionLevel(options?.ascensionLevel || 0)
+    : 0;
+  const ascDef = typeof getAscensionDefinition === "function"
+    ? getAscensionDefinition(state.ascensionLevel)
+    : { startLifeDelta: 0, startingGoldBonus: 0 };
   state.runSeed = normalizeRunSeed(seed);
   state.rngState = state.runSeed ? hashRunSeed(state.runSeed) : null;
   state.runId = createRunId();
@@ -1065,11 +1136,12 @@ function startNewRun(
   state.consumables = [{ ...CONSUMABLE_DB[0], uid: nextUid() }];
 
   state.encounterIdx = 0;
-  state.playerLife = START_LIFE;
-  state.gold = 6 + challenge.startingGoldBonus;
+  state.playerLife = Math.max(1, START_LIFE + (ascDef.startLifeDelta || 0));
+  state.gold = 6 + challenge.startingGoldBonus + (ascDef.startingGoldBonus || 0);
   state.synTiers = {};
   state.route = createInitialRouteState(0, campaign.id);
   state.pendingDraft = null;
+  state.pendingBossRelic = null;
 
   beginEncounter();
   saveRunState(false);
@@ -1085,11 +1157,17 @@ function beginEncounter() {
   state.runOver = false;
   state.combatLocked = false;
   state.pendingDraft = null;
+  state.pendingBossRelic = null;
   const enc = getCurrentEncounter();
   const challenge = getRunChallengeById(state.challengeId);
   const encounters = getActiveCampaignEncounters();
-  const loopScale = Math.pow(2.5, Math.floor(state.encounterIdx / encounters.length));
-  state.enemyMaxLife = Math.round(enc.maxLife * loopScale);
+  const loopCount = Math.floor(state.encounterIdx / encounters.length);
+  const loopScale = Math.pow(2.5, loopCount);
+  const ascDef = typeof getAscensionDefinition === "function"
+    ? getAscensionDefinition(state.ascensionLevel || 0)
+    : { bossHpMult: 1 };
+  const ascHpMult = ascDef.bossHpMult || 1;
+  state.enemyMaxLife = Math.round(enc.maxLife * loopScale * ascHpMult);
   state.enemyLife = state.enemyMaxLife;
 
   state.library = shuffle(state.masterDeck.map(c => ({ ...c, keywords: [...c.keywords], produces: [...c.produces] })));
@@ -1097,10 +1175,16 @@ function beginEncounter() {
   state.graveyard = [];
   state.playerLands = [];
   state.playerCreatures = [];
+  state.playerPermanents = [];
   state.enemyCreatures = [];
 
   state.turn = 1;
-  state.maxTurns = challenge.maxTurns;
+  const activeMutators = typeof getActiveEndlessMutators === "function"
+    ? getActiveEndlessMutators(loopCount)
+    : [];
+  const clockMutatorPenalty = activeMutators.some(m => m.id === "collapsing_clock") ? 1 : 0;
+  const relicClockPenalty = typeof getRelicTurnClockPenalty === "function" ? getRelicTurnClockPenalty() : 0;
+  state.maxTurns = Math.max(3, challenge.maxTurns - clockMutatorPenalty - relicClockPenalty);
   state.mulligansLeft = 1;
   state.canMulligan = true;
 
@@ -1181,6 +1265,27 @@ function startPlayerTurn(isFirstTurn = false, prefixLog = "") {
       spawnFx(`Clockwork Regent: Board +${buff}/+${buff} & +${stackCount} Mult!`, "#a4b0be");
     }
   });
+  state.playerPermanents = Array.isArray(state.playerPermanents) ? state.playerPermanents : [];
+  state.playerPermanents.forEach(p => {
+    if (p.permanentEffect === "glorious_anthem") {
+      addResonance(1, "Radiant Anthem");
+    } else if (p.permanentEffect === "rhystic_archive") {
+      drawCards(1);
+      addResonance(1, "Aetherial Archive");
+      spawnFx("Aetherial Archive: +1 Card & +1 Mult!", "#59a2ff");
+    } else if (p.permanentEffect === "phyrexian_arena") {
+      if (state.playerLife > 1) state.playerLife = Math.max(1, state.playerLife - 1);
+      drawCards(1);
+      addResonance(2, "Obsidian Pact");
+      spawnFx("Obsidian Pact: +1 Card & +2 Mult (-1 Life)!", "#9b59b6");
+    } else if (p.permanentEffect === "arcane_signet") {
+      state.manaPool.ANY += 1;
+      addResonance(1, "Aether Signet");
+    } else if (p.permanentEffect === "gilded_lotus_relic") {
+      state.manaPool.C += 2;
+      state.manaPool.ANY += 1;
+    }
+  });
   dispatchRelicEvent("onTurnStart", { isFirstTurn });
 
   if (!isFirstTurn) {
@@ -1243,6 +1348,11 @@ function playCardFromHand(cardUid) {
     payManaForCard(card);
     if (card.type === "Creature") {
       handleCreatureCast(card);
+    } else if (card.type === "Enchantment" || card.type === "Artifact") {
+      handlePermanentCast(card);
+    } else if (card.type === "Curse") {
+      spawnFx(`Purged ${card.name}!`, "#9b59b6");
+      setLog(`Purged ${card.name} from this encounter.`);
     } else {
       handleSpellCast(card);
     }
@@ -1363,6 +1473,66 @@ function triggerLandfall() {
       handler(c, c.count || 1);
     }
   });
+  if (Array.isArray(state.playerPermanents)) {
+    state.playerPermanents.forEach(p => {
+      if (p && p.permanentEffect === "hardened_scales") {
+        const buff = 1 * getTokenMultiplier();
+        state.playerCreatures.forEach(c => {
+          c.power += buff;
+          c.toughness += buff;
+        });
+        addResonance(1, "Primal Leyline");
+        spawnFx(`Primal Leyline: Board +${buff}/+${buff} & +1 Mult!`, "#2ecc71");
+      }
+    });
+  }
+}
+
+function handlePermanentCast(card) {
+  if (!Array.isArray(state.playerPermanents)) state.playerPermanents = [];
+  const permanentObj = {
+    uid: card.uid,
+    id: card.id,
+    name: card.name,
+    type: card.type,
+    subtype: card.subtype || card.type,
+    color: card.color,
+    manaCost: card.manaCost || "",
+    keywords: [...(card.keywords || [])],
+    permanentEffect: card.permanentEffect || null,
+    rules: card.rules || "",
+    foil: card.foil || null
+  };
+  state.playerPermanents.push(permanentObj);
+  recordCombatEvent("trigger", `${card.name} (${card.type}) entered the battlefield.`, {
+    cardId: card.id,
+    trigger: "permanent_enter"
+  });
+
+  // Trigger ETB effects for mana rocks & immediate banners
+  const triggers = getTriggerMultiplier();
+  for (let i = 0; i < triggers; i++) {
+    if (permanentObj.permanentEffect === "arcane_signet") {
+      state.manaPool.ANY += 1;
+      addResonance(1, "Aether Signet");
+      spawnFx("Aether Signet: +1 Wild Mana & +1 Mult!", "#ffd466");
+    } else if (permanentObj.permanentEffect === "gilded_lotus_relic") {
+      state.manaPool.C += 2;
+      state.manaPool.ANY += 1;
+      spawnFx("Sunstone Dynamo: +{C}{C} & +1 Wild Mana!", "#ffd466");
+    } else if (permanentObj.permanentEffect === "glorious_anthem") {
+      addResonance(1, "Radiant Anthem");
+      spawnFx("Radiant Anthem: Creatures +2/+2 & +1 Mult!", "#ffe299");
+    } else if (permanentObj.permanentEffect === "fervor_banner") {
+      state.playerCreatures.forEach(c => {
+        if (!c.keywords.includes("Haste")) addTempKeyword(c, "Haste");
+        c.summoningSick = false;
+      });
+      spawnFx("Warcaller's Standard: Creatures gain Haste!", "#ff6b6b");
+    } else {
+      spawnFx(`Deployed ${card.name}!`, "#b18cff");
+    }
+  }
 }
 
 function handleCreatureCast(card) {
@@ -1370,7 +1540,9 @@ function handleCreatureCast(card) {
     cardId: card.id,
     trigger: "creature_enter"
   });
-  const hasHaste = card.keywords.includes("Haste");
+  const hasFervor = Array.isArray(state.playerPermanents) &&
+    state.playerPermanents.some(p => p && p.permanentEffect === "fervor_banner");
+  const hasHaste = card.keywords.includes("Haste") || hasFervor;
   const creatureObj = {
     uid: card.uid,
     id: card.id,
@@ -1458,6 +1630,16 @@ function spawnTokens(name, power, toughness, color, keywords, baseCount) {
 }
 
 function triggerOnCreatureEnter(enteredCount) {
+  if (Array.isArray(state.playerPermanents)) {
+    state.playerPermanents.forEach(p => {
+      if (p && p.permanentEffect === "fervor_banner") {
+        addBurnPower(2 * enteredCount, "Warcaller's Standard");
+      } else if (p && p.permanentEffect === "altar_of_ash") {
+        addResonance(1 * enteredCount, "Ashvein Altar");
+        addBurnPower(2 * enteredCount, "Ashvein Altar");
+      }
+    });
+  }
   dispatchRelicEvent("onCreatureEnter", {
     count: enteredCount,
     tokenMult: getTokenMultiplier()
@@ -1645,6 +1827,65 @@ const ETB_EFFECTS = {
     spawnTokens("Shard Construct", 1, 1, "C", ["Haste"], 3);
     addResonance(2, "Aetherium Juggernaut");
     spawnFx("Aetherium Juggernaut: +3 Shard Constructs & +2 Mult!", "#a4b0be");
+  },
+  skyguard() {
+    const strongest = [...state.enemyCreatures].sort((a, b) => b.power - a.power)[0];
+    if (strongest) strongest.frozen = true;
+    addResonance(1, "Cloudspire Skyguard");
+    spawnFx(
+      strongest ? `Cloudspire Skyguard: Froze ${strongest.name} & +1 Mult!` : "Cloudspire Skyguard: +1 Mult!",
+      "#59a2ff"
+    );
+  },
+  cloudblazer() {
+    gainLife(2, "Skyvault Oracle");
+    drawCards(2);
+    addResonance(2, "Skyvault Oracle");
+    spawnFx("Skyvault Oracle: +2 Life, +2 Cards & +2 Mult!", "#59a2ff");
+  },
+  dimir_informant() {
+    const milled = millCards(3);
+    drawCards(1);
+    addResonance(1, "Gloomtide Whisperer");
+    spawnFx(`Gloomtide Whisperer: Milled ${milled}, +1 Card & +1 Mult!`, "#9b59b6");
+  },
+  nightveil(creature) {
+    millCards(2);
+    const gyCreatures = Math.min(4, state.graveyard.filter(c => c.type === "Creature").length);
+    const bonus = gyCreatures * getTokenMultiplier();
+    if (creature && bonus > 0) {
+      creature.power += bonus;
+      creature.toughness += bonus;
+    }
+    addResonance(1, "Nightveil Reaper");
+    spawnFx(`Nightveil Reaper: +${bonus}/+${bonus} & +1 Mult!`, "#9b59b6");
+  },
+  celebrant() {
+    spawnTokens("Spirit Token", 1, 1, "W", ["Flying", "Haste"], 1);
+    gainLife(2, "Duskchoir Celebrant");
+    addBurnPower(2, "Duskchoir Celebrant");
+    spawnFx("Duskchoir Celebrant: +1 Spirit, +2 Life & +2 Burn!", "#ffe299");
+  },
+  blood_baron() {
+    gainLife(4, "Oathsworn Prelate");
+    addBurnPower(4, "Oathsworn Prelate");
+    addResonance(2, "Oathsworn Prelate");
+    spawnFx("Oathsworn Prelate: +4 Life, +4 Burn & +2 Mult!", "#ffe299");
+  },
+  conclave_mentor() {
+    const buff = 1 * getTokenMultiplier();
+    state.playerCreatures.forEach(c => {
+      c.power += buff;
+      c.toughness += buff;
+    });
+    gainLife(2, "Grove Mentor");
+    spawnFx(`Grove Mentor: Board +${buff}/+${buff} & +2 Life!`, "#2ecc71");
+  },
+  trostani() {
+    spawnTokens("Soldier Token", 2, 2, "W", ["Lifelink", "Haste"], 2);
+    gainLife(3, "Verdant Matriarch");
+    addResonance(2, "Verdant Matriarch");
+    spawnFx("Verdant Matriarch: +2 Soldiers, +3 Life & +2 Mult!", "#2ecc71");
   }
 };
 
@@ -2056,6 +2297,51 @@ const SPELL_EFFECTS = {
     });
     addResonance(2, "Aetherdrive Sovereign");
     spawnFx(`AETHERDRIVE! All Creatures +${buff}/+${buff}, Flying & Haste!`, "#a4b0be");
+  },
+  ephemerate() {
+    drawCards(1);
+    addResonance(2, "Aether Blink");
+    const etbTargets = state.playerCreatures.filter(c => c.etb && ETB_EFFECTS[c.etb]);
+    if (etbTargets.length > 0) {
+      const target = [...etbTargets].sort((a, b) => (b.power + (b.tempPower || 0)) - (a.power + (a.tempPower || 0)))[0];
+      const triggers = getTriggerMultiplier();
+      for (let i = 0; i < triggers; i++) {
+        triggerCreatureETB(target);
+      }
+      spawnFx(`✨ Aether Blink: Re-triggered ${target.name} ETB!`, "#59a2ff");
+    } else if (state.playerCreatures.length > 0) {
+      const target = [...state.playerCreatures].sort((a, b) => (b.power + (b.tempPower || 0)) - (a.power + (a.tempPower || 0)))[0];
+      target.tempPower = (target.tempPower || 0) + 2;
+      target.tempToughness = (target.tempToughness || 0) + 2;
+      addTempKeyword(target, "Flying");
+      spawnFx(`✨ Aether Blink: ${target.name} +2/+2 & Flying!`, "#59a2ff");
+    } else {
+      spawnFx("✨ Aether Blink: Drew 1 & +2 Mult!", "#59a2ff");
+    }
+  },
+  thought_scour() {
+    const milled = millCards(3);
+    const strongest = [...state.enemyCreatures].sort((a, b) => b.power - a.power)[0];
+    if (strongest) strongest.frozen = true;
+    drawCards(1);
+    addResonance(1, "Abyssal Scour");
+    spawnFx(
+      strongest
+        ? `Abyssal Scour: Milled ${milled}, Froze ${strongest.name} & Drew 1!`
+        : `Abyssal Scour: Milled ${milled} & Drew 1!`,
+      "#59a2ff"
+    );
+  },
+  lingering_souls() {
+    spawnTokens("Spirit Token", 1, 1, "W", ["Flying", "Haste"], 2);
+    gainLife(2, "Vesper Procession");
+    addResonance(1, "Vesper Procession");
+    spawnFx("Vesper Procession: +2 Flying Spirits & +2 Life!", "#ffe299");
+  },
+  selesnya_charm() {
+    spawnTokens("Knight Token", 2, 2, "G", ["Haste"], 2);
+    addResonance(1, "Verdant Call");
+    spawnFx("Verdant Call: +2 Haste Knights & +1 Mult!", "#2ecc71");
   }
 };
 
@@ -2151,8 +2437,8 @@ function isCardLegalForDeck(cardOrId, deckColors) {
   const card = typeof cardOrId === "string" ? (typeof CARD_DB !== "undefined" ? CARD_DB[cardOrId] : null) : cardOrId;
   if (!card || typeof card !== "object") return false;
 
-  // 1. Basic lands strictly excluded
-  if (card.subtype === "Basic") return false;
+  // 1. Basic lands & uncollectible curse/token cards strictly excluded
+  if (card.subtype === "Basic" || card.uncollectible || card.isCurse) return false;
 
   const colorsSet = deckColors instanceof Set
     ? deckColors
@@ -2655,6 +2941,26 @@ function handleEncounterVictory() {
 
   let profileResult = null;
   const isFinalEncounter = state.encounterIdx % getActiveCampaignEncounters().length === getActiveCampaignEncounters().length - 1;
+  const isMidBoss = !isFinalEncounter && enc.tier === "PLANAR OVERLORD";
+  if (isMidBoss && typeof getBossRelicPool === "function") {
+    const bossPool = getBossRelicPool();
+    shuffle(bossPool);
+    const bossChoices = bossPool.slice(0, 3).map(r => r.id);
+    if (bossChoices.length > 0) {
+      state.pendingBossRelic = {
+        choices: bossChoices,
+        encounterIdx: state.encounterIdx,
+        resolved: false,
+        skipped: false,
+        selectedRelicId: null
+      };
+    } else {
+      state.pendingBossRelic = null;
+    }
+  } else {
+    state.pendingBossRelic = null;
+  }
+
   if (!isFinalEncounter) {
     const deckColors = getDeckColors();
     const draftCards = sampleDraftPool(deckColors, 2);
@@ -2742,10 +3048,100 @@ function handleDefeat() {
   }
 }
 
+function selectBossRelic(choiceIdx) {
+  if (!state.pendingBossRelic || state.pendingBossRelic.resolved || state.runOver) return false;
+  const choices = state.pendingBossRelic.choices;
+  if (!Array.isArray(choices) || choices.length === 0) return false;
+
+  let relicId = null;
+  if (typeof choiceIdx === "number") {
+    if (choiceIdx < 0 || choiceIdx >= choices.length) return false;
+    relicId = choices[choiceIdx];
+  } else if (typeof choiceIdx === "string" && choices.includes(choiceIdx)) {
+    relicId = choiceIdx;
+  }
+  const def = relicId ? RELIC_DB.find(r => r.id === relicId) : null;
+  if (!def || hasRelic(def.id)) return false;
+
+  // Boss Relics grant an extra 6th Command Zone slot if needed
+  if (state.relics.length < 6) {
+    state.relics.push({ ...def });
+  }
+  state.pendingBossRelic.resolved = true;
+  state.pendingBossRelic.skipped = false;
+  state.pendingBossRelic.selectedRelicId = def.id;
+
+  saveRunState(false);
+
+  if (!isHeadlessEnv()) {
+    if (typeof playSoundCue === "function") playSoundCue("shopBuy");
+    if (typeof spawnFx === "function") spawnFx(`👑 Claimed Boss Relic: ${def.name}!`, "#ffd466");
+    if (typeof setLog === "function") setLog(`Claimed Boss Relic: ${def.name}.`);
+    if (typeof closeBossRelicModal === "function") closeBossRelicModal();
+    if (typeof renderAll === "function") renderAll();
+    if (state.pendingDraft && !state.pendingDraft.resolved && typeof openDraftModal === "function") {
+      openDraftModal(getCurrentEncounter());
+    } else if (typeof safeShowModal === "function") {
+      if (typeof renderShop === "function") renderShop();
+      safeShowModal("shop-dialog");
+    }
+  }
+  return true;
+}
+
+function skipBossRelic() {
+  if (!state.pendingBossRelic || state.pendingBossRelic.resolved || state.runOver) return false;
+  state.gold += 6;
+  state.pendingBossRelic.resolved = true;
+  state.pendingBossRelic.skipped = true;
+  state.pendingBossRelic.selectedRelicId = null;
+
+  saveRunState(false);
+
+  if (!isHeadlessEnv()) {
+    if (typeof spawnFx === "function") spawnFx("Boss Relic Skipped: +$6 Gold!", "#ffd466");
+    if (typeof setLog === "function") setLog(`Skipped Boss Relic for +$6 Gold bounty (Gold: $${state.gold}).`);
+    if (typeof closeBossRelicModal === "function") closeBossRelicModal();
+    if (typeof renderAll === "function") renderAll();
+    if (state.pendingDraft && !state.pendingDraft.resolved && typeof openDraftModal === "function") {
+      openDraftModal(getCurrentEncounter());
+    } else if (typeof safeShowModal === "function") {
+      if (typeof renderShop === "function") renderShop();
+      safeShowModal("shop-dialog");
+    }
+  }
+  return true;
+}
+
 function generateShopStock(preserveUpgrades = false) {
-  const unownedRelics = RELIC_DB.filter(r => !hasRelic(r.id));
-  shuffle(unownedRelics);
-  state.shopStock.relics = unownedRelics.slice(0, 2).map(r => ({ ...r, bought: false }));
+  const unownedRelics = typeof getShopRelicPool === "function"
+    ? getShopRelicPool()
+    : RELIC_DB.filter(r => !r.bossOnly && !hasRelic(r.id));
+  const encPlane = Number(getCurrentEncounter()?.plane) || 1;
+  const pickedRelics = [];
+  const relicPool = [...unownedRelics];
+  const rarityWeight = (r) => {
+    const rar = r.rarity || "common";
+    if (encPlane >= 2) {
+      return rar === "rare" ? 28 : (rar === "uncommon" ? 42 : 30);
+    }
+    return rar === "rare" ? 15 : (rar === "uncommon" ? 35 : 50);
+  };
+  for (let i = 0; i < 2 && relicPool.length > 0; i++) {
+    const totalW = relicPool.reduce((s, r) => s + rarityWeight(r), 0);
+    let roll = gameRandom() * totalW;
+    let chosenIdx = relicPool.length - 1;
+    for (let j = 0; j < relicPool.length; j++) {
+      roll -= rarityWeight(relicPool[j]);
+      if (roll <= 0) {
+        chosenIdx = j;
+        break;
+      }
+    }
+    const [chosen] = relicPool.splice(chosenIdx, 1);
+    pickedRelics.push({ ...chosen, bought: false });
+  }
+  state.shopStock.relics = pickedRelics;
 
   // Color-weighted draft pool (Step 1: weight toward deck's colors, with occasional off-color splash)
   const deckColors = getDeckColors();
@@ -2753,7 +3149,7 @@ function generateShopStock(preserveUpgrades = false) {
 
   const allDraftIds = Object.keys(CARD_DB).filter(id => {
     const c = CARD_DB[id];
-    return c.subtype !== "Basic";
+    return c.subtype !== "Basic" && !c.uncollectible && !c.isCurse;
   });
 
   const inColorPool = [];
@@ -2904,7 +3300,8 @@ function generateShopStock(preserveUpgrades = false) {
 
 function buyRelic(idx) {
   const item = state.shopStock.relics[idx];
-  if (!item || item.bought || state.gold < item.cost || state.relics.length >= 5) return;
+  const maxSlots = typeof getRelicMaxSlots === "function" ? getRelicMaxSlots() : 5;
+  if (!item || item.bought || state.gold < item.cost || state.relics.length >= maxSlots) return;
   state.gold -= item.cost;
   item.bought = true;
   if (typeof playSoundCue === "function") playSoundCue("shopBuy");
@@ -3133,6 +3530,60 @@ function useConsumable(uid) {
     addResonance(2, "Tempest Cycle");
     spawnFx("🎡 Tempest Cycle: Drew 5 Fresh Cards & +2 Mult!", "#ff4757");
     setLog("Tempest Cycle: Discarded hand, drew 5 fresh cards, and gained +2 Resonance!");
+  } else if (scroll.id === "mirror_scroll") {
+    addResonance(1, "Rift Mirror");
+    if (state.playerCreatures.length > 0) {
+      const strongest = [...state.playerCreatures].sort((a, b) => (b.power + (b.tempPower || 0)) - (a.power + (a.tempPower || 0)))[0];
+      const cloneObj = {
+        ...strongest,
+        uid: nextUid(),
+        count: 1,
+        isToken: true,
+        keywords: [...new Set([...(strongest.keywords || []), "Haste"])],
+        tempKeywords: [...(strongest.tempKeywords || [])],
+        summoningSick: false,
+        attacking: true,
+        rules: `Mirrored Clone of ${strongest.name}.`
+      };
+      addCreatureToBoard(cloneObj);
+      if (cloneObj.etb && ETB_EFFECTS[cloneObj.etb]) {
+        const triggers = getTriggerMultiplier();
+        for (let i = 0; i < triggers; i++) triggerCreatureETB(cloneObj);
+      }
+      spawnFx(`🪞 Rift Mirror: Cloned ${strongest.name} with Haste!`, "#59a2ff");
+      setLog(`Rift Mirror cloned ${strongest.name} onto your battlefield with Haste (+1 Resonance)!`);
+    } else {
+      spawnTokens("Mirror Construct", 3, 3, "C", ["Haste"], 1);
+      setLog("Rift Mirror: No Creature to clone, conjured a 3/3 Haste Mirror Construct (+1 Resonance)!");
+    }
+  } else if (scroll.id === "transmute_relic") {
+    const rarePool = RELIC_DB.filter(r => !r.bossOnly && r.rarity === "rare" && !hasRelic(r.id));
+    if (state.relics.length > 0 && rarePool.length > 0) {
+      const removed = state.relics.pop();
+      const replacement = rarePool[Math.floor(gameRandom() * rarePool.length)];
+      state.relics.push({ ...replacement });
+      state.gold += 4;
+      spawnFx(`⚗️ Transmuted ${removed.name} → ${replacement.name} (+$4)!`, "#b18cff");
+      setLog(`Alchemist's Sigil transmuted ${removed.name} into Rare Relic ${replacement.name} and granted +$4 Gold!`);
+    } else {
+      addResonance(3, "Alchemist's Sigil");
+      state.gold += 4;
+      spawnFx("⚗️ Alchemist's Sigil: +3 Mult & +$4 Gold!", "#b18cff");
+      setLog("Alchemist's Sigil granted +3 Resonance and +$4 Gold!");
+    }
+  } else if (scroll.id === "aether_overdrive") {
+    const buff = 2 * getTokenMultiplier();
+    state.playerCreatures.forEach(c => {
+      c.tempPower = (c.tempPower || 0) + buff;
+      c.tempToughness = (c.tempToughness || 0) + buff;
+      addTempKeyword(c, "Haste");
+      addTempKeyword(c, "Trample");
+      c.summoningSick = false;
+      c.attacking = true;
+    });
+    addResonance(2, "Overdrive Scroll");
+    spawnFx(`⚡ Overdrive Scroll: All Creatures +${buff}/+${buff}, Haste & Trample!`, "#ffd466");
+    setLog(`Overdrive Scroll: All Creatures gained +${buff}/+${buff}, Haste, and Trample (+2 Resonance)!`);
   }
 
   renderAll();
@@ -3458,6 +3909,30 @@ function normalizeCanonicalSave(candidate) {
     }
   }
   canonicalSave.pendingDraft = pendingDraft;
+  let pendingBossRelic = null;
+  if (working.pendingBossRelic && typeof working.pendingBossRelic === "object") {
+    const rawRelicChoices = Array.isArray(working.pendingBossRelic.choices)
+      ? working.pendingBossRelic.choices.filter(id => typeof id === "string" && (typeof RELIC_DB === "undefined" || RELIC_DB.some(r => r.id === id)))
+      : [];
+    if (rawRelicChoices.length > 0 || working.pendingBossRelic.resolved) {
+      pendingBossRelic = {
+        choices: rawRelicChoices,
+        encounterIdx: Number.isFinite(Number(working.pendingBossRelic.encounterIdx)) ? Math.floor(Number(working.pendingBossRelic.encounterIdx)) : safeEncIdx,
+        resolved: Boolean(working.pendingBossRelic.resolved),
+        skipped: Boolean(working.pendingBossRelic.skipped),
+        selectedRelicId: typeof working.pendingBossRelic.selectedRelicId === "string" ? working.pendingBossRelic.selectedRelicId : null
+      };
+    }
+  }
+  if (pendingBossRelic) {
+    canonicalSave.pendingBossRelic = pendingBossRelic;
+  }
+  const safeAsc = typeof normalizeAscensionLevel === "function"
+    ? normalizeAscensionLevel(working.ascensionLevel || 0)
+    : 0;
+  if (safeAsc > 0) {
+    canonicalSave.ascensionLevel = safeAsc;
+  }
   const expectedChecksum = fallbackComputeSaveChecksum(canonicalSave);
   if (typeof working.saveIntegrity === "string" && working.saveIntegrity.length > 0) {
     const rawChecksum = fallbackComputeSaveChecksum(working);
@@ -3503,6 +3978,7 @@ function createEncounterSaveSnapshot() {
     "graveyard",
     "playerLands",
     "playerCreatures",
+    "playerPermanents",
     "enemyCreatures",
     "enemyLife",
     "enemyMaxLife",
@@ -3626,6 +4102,7 @@ function createCanonicalSavePayload(inShop = false) {
     encounterIdx: state.encounterIdx,
     ...(state.challengeId && state.challengeId !== "standard" ? { challengeId: state.challengeId } : {}),
     ...(getActiveCampaignId() !== DEFAULT_CAMPAIGN_ID ? { campaignId: getActiveCampaignId() } : {}),
+    ...(state.ascensionLevel > 0 ? { ascensionLevel: state.ascensionLevel } : {}),
     ...(state.runSeed ? { runSeed: state.runSeed, rngState: state.rngState } : {}),
     ...(state.runId ? {
       runId: state.runId,
@@ -3664,7 +4141,16 @@ function createCanonicalSavePayload(inShop = false) {
       resolved: Boolean(state.pendingDraft.resolved),
       skipped: Boolean(state.pendingDraft.skipped),
       selectedCardId: state.pendingDraft.selectedCardId || null
-    } : null
+    } : null,
+    ...(state.pendingBossRelic ? {
+      pendingBossRelic: {
+        choices: Array.isArray(state.pendingBossRelic.choices) ? [...state.pendingBossRelic.choices] : [],
+        encounterIdx: Number(state.pendingBossRelic.encounterIdx) || state.encounterIdx,
+        resolved: Boolean(state.pendingBossRelic.resolved),
+        skipped: Boolean(state.pendingBossRelic.skipped),
+        selectedRelicId: state.pendingBossRelic.selectedRelicId || null
+      }
+    } : {})
   };
   const check = normalizeCanonicalSave(rawPayload);
   return check.valid ? check.save : rawPayload;
@@ -3730,6 +4216,19 @@ function applyCanonicalSaveToState(saved, recoveredFromBackup = false) {
   state.runHistoryRecorded = Boolean(saved.runHistoryRecorded);
   state.runTurns = Math.max(0, Math.floor(Number(saved.runTurns) || 0));
   state.challengeId = normalizeRunChallengeId(saved.challengeId);
+  state.ascensionLevel = typeof normalizeAscensionLevel === "function"
+    ? normalizeAscensionLevel(saved.ascensionLevel || 0)
+    : 0;
+  state.pendingBossRelic = saved.pendingBossRelic && typeof saved.pendingBossRelic === "object"
+    ? {
+        choices: Array.isArray(saved.pendingBossRelic.choices) ? [...saved.pendingBossRelic.choices] : [],
+        encounterIdx: Number(saved.pendingBossRelic.encounterIdx) || state.encounterIdx,
+        resolved: Boolean(saved.pendingBossRelic.resolved),
+        skipped: Boolean(saved.pendingBossRelic.skipped),
+        selectedRelicId: saved.pendingBossRelic.selectedRelicId || null
+      }
+    : null;
+  state.playerPermanents = [];
   state.encounterIdx = Number(saved.encounterIdx) || 0;
   state.playerLife = Math.min(MAX_LIFE, Math.max(1, Number(saved.playerLife) || START_LIFE));
   state.gold = Math.max(0, Number(saved.gold) || 0);

@@ -84,6 +84,26 @@ function applyLandTapEffects(land) {
       pushToGraveyard(milled);
       if (typeof spawnFx === "function") spawnFx(`🪦 Blighted ${land.name} milled ${milled.name}`, "#9b59b6");
     }
+  } else if (enh === "verdant") {
+    if (typeof gainLife === "function") gainLife(1, `Verdant ${land.name}`);
+    if (state.playerCreatures && state.playerCreatures.length > 0) {
+      const target = [...state.playerCreatures].sort((a, b) => (b.power + (b.tempPower || 0)) - (a.power + (a.tempPower || 0)))[0];
+      target.tempPower = (target.tempPower || 0) + 1;
+      target.tempToughness = (target.tempToughness || 0) + 1;
+      if (typeof spawnFx === "function") spawnFx(`🌿 Verdant ${land.name}: +1 Life & ${target.name} +1/+1!`, "#26d07c");
+    } else if (typeof spawnFx === "function") {
+      spawnFx(`🌿 Verdant ${land.name}: +1 Life!`, "#26d07c");
+    }
+  } else if (enh === "aetherial") {
+    state.turnStats = state.turnStats || {};
+    state.turnStats.aetherialTaps = (state.turnStats.aetherialTaps || 0) + 1;
+    if (state.turnStats.aetherialTaps === 1) {
+      state.manaPool.C = (state.manaPool.C || 0) + 1;
+      if (typeof spawnFx === "function") spawnFx(`🔮 Aetherial ${land.name}: +1 {C} Mana!`, "#59a2ff");
+    } else if (typeof addResonance === "function") {
+      addResonance(1, `Aetherial ${land.name}`);
+      if (typeof spawnFx === "function") spawnFx(`🔮 Aetherial ${land.name}: +1 Mult!`, "#59a2ff");
+    }
   }
 
   const passive = land.fusedPassive;

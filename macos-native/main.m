@@ -269,9 +269,9 @@ static NSDictionary *ExecuteStorageCommand(NSString *cmd, NSDictionary *args, NS
   self.window.titleVisibility = NSWindowTitleHidden;
   self.window.titlebarAppearsTransparent = YES;
   self.window.minSize = NSMakeSize(1024, 680);
-  self.window.backgroundColor = [NSColor colorWithSRGBRed:11.0 / 255.0
-                                                    green:13.0 / 255.0
-                                                     blue:19.0 / 255.0
+  self.window.backgroundColor = [NSColor colorWithSRGBRed:16.0 / 255.0
+                                                    green:14.0 / 255.0
+                                                     blue:13.0 / 255.0
                                                     alpha:1.0];
   self.window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
   self.window.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;

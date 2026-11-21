@@ -61,16 +61,72 @@ function getManaSurgeBonus() {
   };
 }
 
+function getPermanentStaticCombatBonus() {
+  const permanents = Array.isArray(state.playerPermanents) ? state.playerPermanents : [];
+  let powerBonus = 0;
+  let toughnessBonus = 0;
+  for (const p of permanents) {
+    if (p && p.permanentEffect === "glorious_anthem") {
+      powerBonus += 2;
+      toughnessBonus += 2;
+    }
+  }
+  return { powerBonus, toughnessBonus };
+}
+
+function getEncounterTurnIntent(enc, turn = state.turn) {
+  if (!enc) return { headline: "", badges: [], surgeActive: false, surgeUpcoming: false };
+  const badges = [];
+  const surgeActive = Boolean(enc.surgeTurn && turn === enc.surgeTurn);
+  const surgeUpcoming = Boolean(enc.surgeTurn && turn === enc.surgeTurn - 1);
+
+  if (surgeActive) {
+    badges.push({ kind: "danger", text: `⚠️ SURGE THIS TURN: ${enc.surgeLabel || "Boss Surge!"}` });
+  } else if (surgeUpcoming) {
+    badges.push({ kind: "warning", text: `⏳ NEXT TURN (T${enc.surgeTurn}): ${enc.surgeLabel || "Boss Surge"}` });
+  }
+
+  if (enc.spellWardTax && (state.playerLands?.length || 0) < 4 && (state.turnStats?.spells || 0) === 0) {
+    badges.push({ kind: "info", text: "🛡️ Spell Tax Active (<4 Lands: 1st spell spawns 1/1 Flyer)" });
+  }
+  if (enc.evenTurnDoubleSpawn && turn % 2 === 0) {
+    badges.push({ kind: "warning", text: "🔥 Even-Turn Double Wave!" });
+  } else if (enc.evenTurnBonusGuard && turn % 2 === 0) {
+    badges.push({ kind: "warning", text: "🛡️ Even-Turn Extra Guard!" });
+  }
+  if (enc.stampedeTurn && turn >= enc.stampedeTurn) {
+    badges.push({ kind: "warning", text: "🐗 Stampede Active (+1 Spawn/Turn)" });
+  }
+  if (enc.staxDrain) {
+    badges.push({ kind: "info", text: `🩸 Drains ${enc.staxDrain} Life/Turn` });
+  }
+  if (enc.burnImmune) {
+    badges.push({ kind: "info", text: "🪨 Burn Immune" });
+  } else if (enc.burnResistance) {
+    badges.push({ kind: "info", text: `🛡️ ${Math.round(enc.burnResistance * 100)}% Burn Ward` });
+  }
+
+  const nextSpawn = getEnemyWaveSpawnCount(enc, turn + 1, state.enemyCreatures?.length || 0);
+  const headline = surgeActive
+    ? `⚠️ ${enc.name} Surge triggers at end of turn!`
+    : (surgeUpcoming
+      ? `⏳ Telegraph: ${enc.name} prepares ${enc.surgeLabel || "Surge"} on Turn ${enc.surgeTurn}.`
+      : `Next Wave (T${turn + 1}): +${nextSpawn} ${enc.spawn?.name || "Blocker"}${nextSpawn === 1 ? "" : "s"}`);
+
+  return { headline, badges, surgeActive, surgeUpcoming };
+}
+
 // Shared block & combat damage model used by both live projection, hover breakdowns, and combat resolution
 function calculateProjectedCombat() {
   const enc = getCurrentEncounter();
+  const permBonus = getPermanentStaticCombatBonus();
   const attackers = [];
   state.playerCreatures.forEach(c => {
     if (!c.attacking || c.summoningSick) return;
     const count = c.count || 1;
     const kws = getCreatureKeywords(c);
-    const unitPow = Math.max(0, c.power + (c.tempPower || 0));
-    const unitTough = Math.max(1, c.toughness + (c.tempToughness || 0));
+    const unitPow = Math.max(0, c.power + (c.tempPower || 0) + permBonus.powerBonus);
+    const unitTough = Math.max(1, c.toughness + (c.tempToughness || 0) + permBonus.toughnessBonus);
     const hasDoubleStrike = kws.includes("Double Strike");
     const strikeMult = hasDoubleStrike ? 2 : 1;
     for (let i = 0; i < count; i++) {
@@ -325,6 +381,32 @@ function executeCombatAndEndTurn() {
     retalParts.push(`${enc.name} Drain (${enc.staxDrain})`);
   }
 
+  // Boss Turn Surge Mechanics (telegraphed on Turn N-1, executes on Turn N)
+  if (enc.surgeTurn && state.turn === enc.surgeTurn) {
+    if (enc.surgeStrike) {
+      enemyAttack += enc.surgeStrike;
+      retalParts.push(`${enc.name} Surge (${enc.surgeStrike})`);
+    }
+    if (enc.surgeBuff) {
+      state.enemyCreatures.forEach(b => {
+        b.power += enc.surgeBuff;
+        b.toughness += enc.surgeBuff;
+      });
+      spawnFx(`👑 ${enc.name} Surge: Enemy Guards +${enc.surgeBuff}/+${enc.surgeBuff}!`, "#ffbe3b");
+    }
+    if (enc.surgeCurse && typeof cloneCard === "function" && typeof CARD_DB !== "undefined" && CARD_DB.blight_curse) {
+      for (let i = 0; i < enc.surgeCurse; i++) {
+        state.library.push(cloneCard("blight_curse"));
+      }
+      if (typeof shuffle === "function") shuffle(state.library);
+      recordCombatEvent("trigger", `${enc.name} shuffled ${enc.surgeCurse} Rift Blight Curse into your Library!`, {
+        boss: enc.name,
+        curseCount: enc.surgeCurse
+      });
+      spawnFx(`☠️ ${enc.name}: Shuffled Rift Blight Curse into Library!`, "#9b59b6");
+    }
+  }
+
   const finishEndOfTurn = () => {
     state.combatLocked = false;
     const prevLife = state.playerLife;
@@ -406,19 +488,34 @@ function getEnemyWaveSpawnCount(enc, turn = state.turn, existingCount = state.en
   if (challenge && challenge.extraEnemyOnEvenTurns && turn % 2 === 0) {
     count += challenge.extraEnemyOnEvenTurns;
   }
+  const activeMutators = typeof getActiveEndlessMutators === "function"
+    ? getActiveEndlessMutators(typeof getCurrentEndlessLoop === "function" ? getCurrentEndlessLoop() : 0)
+    : [];
+  if (turn === 1 && activeMutators.some(m => m.id === "relentless_tide")) {
+    count += 1;
+  }
   return Math.max(0, Math.min(count, 5 - Math.max(0, existingCount)));
 }
 
 function spawnEnemyWave(enc) {
   const count = getEnemyWaveSpawnCount(enc, state.turn, state.enemyCreatures.length);
 
-  const bonusTough = enc.cenobiteAura || 0;
+  const activeMutators = typeof getActiveEndlessMutators === "function"
+    ? getActiveEndlessMutators(typeof getCurrentEndlessLoop === "function" ? getCurrentEndlessLoop() : 0)
+    : [];
+  const mutatorBuff = activeMutators.some(m => m.id === "hardened_vanguard") ? 1 : 0;
+  const ascDef = typeof getAscensionDefinition === "function"
+    ? getAscensionDefinition(state.ascensionLevel || 0)
+    : null;
+  const ascTough = ascDef ? (ascDef.enemyToughnessBonus || 0) : 0;
+  const bonusTough = (enc.cenobiteAura || 0) + mutatorBuff + ascTough;
+  const bonusPow = mutatorBuff;
   for (let i = 0; i < count; i++) {
     if (state.enemyCreatures.length < 5) {
       state.enemyCreatures.push({
         uid: nextUid(),
         name: enc.spawn.name,
-        power: enc.spawn.power,
+        power: enc.spawn.power + bonusPow,
         toughness: enc.spawn.toughness + bonusTough,
         color: enc.spawn.color,
         keywords: [...(enc.spawn.keywords || [])],

@@ -15,6 +15,7 @@ if (!console.warn) console.warn = console.log;
 if (!console.error) console.error = console.log;
 
 load("data/cards.js");
+load("data/card_art.js");
 load("data/relics.js");
 load("mana.js");
 load("combat.js");
@@ -1016,11 +1017,17 @@ resetTestState();
   const veteran = CARD_EVOLUTION_OPTIONS.find(option => option.id === "veteran");
   const trampler = CARD_EVOLUTION_OPTIONS.find(option => option.id === "trampler");
 
+  const vetOpts = getAvailableCardEvolutionOptions(veteranTarget).map(option => option.id);
+  const balothOpts = getAvailableCardEvolutionOptions(cloneCard("rampaging_baloths")).map(option => option.id);
   assert(
     upgradeIdx >= 0 &&
-    getAvailableCardEvolutionOptions(veteranTarget).map(option => option.id).join(",") === "veteran,trampler" &&
-    getAvailableCardEvolutionOptions(cloneCard("rampaging_baloths")).map(option => option.id).join(",") === "veteran",
-    "4.4.9.1 Shop offers two meaningful evolutions and hides Trample when the Creature already has it"
+    vetOpts.includes("veteran") &&
+    vetOpts.includes("trampler") &&
+    vetOpts.length >= 2 &&
+    balothOpts.includes("veteran") &&
+    !balothOpts.includes("trampler") &&
+    !balothOpts.includes("swiftstrike"),
+    "4.4.9.1 Shop offers meaningful evolutions and hides keywords the Creature already has"
   );
   assert(
     completeCardEvolutionPurchase(upgradeIdx, veteranTarget.uid, "invalid") === false &&
@@ -4417,6 +4424,298 @@ console.log("\n=== SECTION 12: LIVING LANDS (ENHANCEMENTS, OVERCHARGE & FUSION) 
     restoredFused.produces.includes("R"),
     "12.7.5 Save/Load round-trip preserves both Land Enhancements and Fused Land definitions"
   );
+}
+
+console.log("\n=== SECTION 13: 10-GUILD ROSTER, BOSS RELICS, PERMANENTS, TELEGRAPHS, ENDLESS & ASCENSION ===");
+{
+  // 13.1 Complete 10-Guild Roster (+ Colorless = 11 Starter Decks)
+  const newGuildIds = ["azorius_blink", "dimir_dredge", "orzhov_aristocrats", "selesnya_tokens"];
+  assert(
+    STARTER_DECKS.length === 11 &&
+    newGuildIds.every(id => STARTER_DECKS.some(d => d.id === id)),
+    "13.1.1 All 10 two-color guilds + Colorless (11 starter decks) exist in STARTER_DECKS"
+  );
+  newGuildIds.forEach(id => {
+    const deck = STARTER_DECKS.find(d => d.id === id);
+    const lands = deck.cards.filter(cid => CARD_DB[cid]?.type === "Land").length;
+    assert(
+      deck.cards.length === 40 && lands === 17 && deck.cards.every(cid => Boolean(CARD_DB[cid])),
+      `13.1.2 Guild '${id}' has 40 valid cards (17 Lands + 23 Spells)`
+    );
+  });
+
+  // 13.2 Boss Relics & Relic Rarity Tiers
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+  const rarities = new Set(RELIC_DB.map(r => r.rarity));
+  assert(
+    rarities.has("common") && rarities.has("uncommon") && rarities.has("rare") && rarities.has("boss") &&
+    getBossRelicPool().length >= 5,
+    "13.2.1 RELIC_DB defines Common, Uncommon, Rare, and 5+ Boss Relics"
+  );
+  generateShopStock(false);
+  assert(
+    state.shopStock.relics.every(r => !r.bossOnly && r.rarity !== "boss"),
+    "13.2.2 Regular Sanctum Shop excludes bossOnly relics"
+  );
+
+  // Trigger Plane 1 Overlord victory -> pendingBossRelic offered
+  state.encounterIdx = 2; // Vaelor, Plane 1 Overlord
+  state.route.currentNodeId = "p1_boss";
+  state.enemyLife = 0;
+  handleEncounterVictory();
+  assert(
+    Boolean(state.pendingBossRelic) &&
+    state.pendingBossRelic.choices.length === 3 &&
+    !state.pendingBossRelic.resolved,
+    "13.2.3 Defeating Plane 1 Overlord offers a 1-of-3 Boss Relic choice"
+  );
+  const chosenBossId = state.pendingBossRelic.choices[0];
+  const claimed = selectBossRelic(0);
+  assert(
+    claimed === true &&
+    state.pendingBossRelic.resolved === true &&
+    hasRelic(chosenBossId) &&
+    getRelicMaxSlots() === 6,
+    "13.2.4 Claiming a Boss Relic adds it to Command Zone and unlocks 6th Relic slot"
+  );
+
+  // 13.3 Persistent Enchantments & Artifacts (Board Permanents)
+  resetTestState();
+  startNewRun(STARTER_DECKS.find(d => d.id === "orzhov_aristocrats"));
+  state.manaPool.W = 5;
+  state.manaPool.R = 5;
+  state.manaPool.C = 5;
+  const anthemCard = cloneCard("glorious_anthem");
+  const signetCard = cloneCard("arcane_signet");
+  state.hand = [anthemCard, signetCard];
+  playCardFromHand(anthemCard.uid);
+  playCardFromHand(signetCard.uid);
+  assert(
+    state.playerPermanents.length === 2 &&
+    state.playerPermanents.some(p => p.id === "glorious_anthem") &&
+    state.playerPermanents.some(p => p.id === "arcane_signet"),
+    "13.3.1 Casting Enchantments and Artifacts deploys them to state.playerPermanents"
+  );
+  spawnTokens("Test Soldier", 2, 2, "W", ["Haste"], 1);
+  state.enemyCreatures = [];
+  const projWithAnthem = calculateProjectedCombat();
+  assert(
+    projWithAnthem.power >= 4,
+    `13.3.2 Radiant Anthem grants +2/+2 static combat power (projected power=${projWithAnthem.power})`
+  );
+
+  // 13.4 Boss Surge Mechanics, Curse & Enemy Telegraphs
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+  state.encounterIdx = 2; // Vaelor (surgeTurn = 3, surgeCurse = 1)
+  beginEncounter();
+  state.turn = 2;
+  const t2Intent = getEncounterTurnIntent(getCurrentEncounter(), 2);
+  assert(
+    t2Intent.surgeUpcoming === true && !t2Intent.surgeActive,
+    "13.4.1 Turn 2 telegraphs Vaelor's Turn 3 Dusk Blight Surge"
+  );
+  state.turn = 3;
+  const t3Intent = getEncounterTurnIntent(getCurrentEncounter(), 3);
+  assert(
+    t3Intent.surgeActive === true,
+    "13.4.2 Turn 3 marks Vaelor's Dusk Blight Surge as active"
+  );
+  const libBeforeCurse = state.library.length;
+  state.playerCreatures = [];
+  state.enemyCreatures = [];
+  executeCombatAndEndTurn();
+  const hasCurse = state.library.some(c => c.id === "blight_curse") || state.hand.some(c => c.id === "blight_curse");
+  assert(
+    hasCurse && (state.library.length + state.hand.length >= libBeforeCurse),
+    "13.4.3 Vaelor Turn 3 Surge shuffles a Rift Blight Curse into the player's Library"
+  );
+
+  // 13.5 Escalating Endless Mutators & Ascension Ladder
+  assert(
+    getActiveEndlessMutators(0).length === 0 &&
+    getActiveEndlessMutators(1).some(m => m.id === "hardened_vanguard") &&
+    getActiveEndlessMutators(2).some(m => m.id === "aether_inflation") &&
+    getActiveEndlessMutators(3).some(m => m.id === "collapsing_clock") &&
+    getActiveEndlessMutators(4).some(m => m.id === "relentless_tide"),
+    "13.5.1 Endless Mutators escalate cumulatively from Loop 1 to Loop 4+"
+  );
+  resetTestState();
+  startNewRun(STARTER_DECKS[0], "standard", DEFAULT_CAMPAIGN_ID, null, { ascensionLevel: 3 });
+  assert(
+    state.ascensionLevel === 3 &&
+    state.playerLife === START_LIFE - 4 &&
+    state.enemyMaxLife === Math.round(ENCOUNTERS[0].maxLife * 1.25),
+    "13.5.2 Ascension 3 applies -4 starting Life and +25% Boss HP scaling"
+  );
+
+  // 13.6 Expanded Evolutions, Land Enhancements & Consumables
+  assert(
+    CARD_EVOLUTION_OPTIONS.length === 5 &&
+    LAND_ENHANCEMENT_OPTIONS.length === 6 &&
+    CONSUMABLE_DB.length === 8,
+    "13.6.1 Expanded Evolutions (5), Land Enhancements (6), and Consumables (8) are registered"
+  );
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+  spawnTokens("Alpha Beast", 5, 5, "G", ["Haste"], 1);
+  const mirrorScroll = { ...CONSUMABLE_DB.find(c => c.id === "mirror_scroll"), uid: nextUid() };
+  state.consumables = [mirrorScroll];
+  useConsumable(mirrorScroll.uid);
+  assert(
+    state.playerCreatures.length === 2,
+    "13.6.2 Rift Mirror consumable clones strongest Creature on board with Haste"
+  );
+  const overdriveScroll = { ...CONSUMABLE_DB.find(c => c.id === "aether_overdrive"), uid: nextUid() };
+  state.consumables = [overdriveScroll];
+  useConsumable(overdriveScroll.uid);
+  assert(
+    state.playerCreatures.every(c => (c.tempPower || 0) >= 2 && getCreatureKeywords(c).includes("Trample")),
+    "13.6.3 Overdrive Scroll grants +2/+2, Haste, and Trample to all Creatures"
+  );
+}
+
+// ============================================================================
+// SECTION 14: ONLINE MTG CARD ART LIBRARY (SCRYFALL)
+// ============================================================================
+console.log("\n=== SECTION 14: ONLINE MTG CARD ART LIBRARY (SCRYFALL) ===");
+{
+  const allCardIds = Object.keys(CARD_DB);
+  const missingArt = allCardIds.filter(id => {
+    const url = getScryfallCardArtUrl(CARD_DB[id], getCardArtTheme(CARD_DB[id]));
+    return !url || !url.startsWith("https://cards.scryfall.io/art_crop/");
+  });
+  assert(
+    missingArt.length === 0,
+    `14.1 Every card in CARD_DB (${allCardIds.length}) maps to a Scryfall art_crop image URL`
+  );
+
+  const boltHtml = renderCardArtHtml(CARD_DB.lightning_bolt, "hand");
+  assert(
+    boltHtml.includes('class="card-art-img"') && boltHtml.includes("https://cards.scryfall.io/art_crop/") && boltHtml.includes("card-art-svg"),
+    "14.2 renderCardArtHtml renders Scryfall <img> with engraved SVG fallback"
+  );
+
+  const tokenCard = { id: "token_goblin", name: "Goblin Token", type: "Creature", subtype: "Goblin", color: "R" };
+  const tokenHtml = renderCardArtHtml(tokenCard, "board");
+  assert(
+    tokenHtml.includes('class="card-art-img"') && tokenHtml.includes("https://cards.scryfall.io/art_crop/"),
+    "14.3 Token & unmapped cards resolve theme-matched Scryfall art_crop URLs"
+  );
+
+  const badgeHtml = renderCardIconBadgeHtml(CARD_DB.serra_angel);
+  assert(
+    badgeHtml.includes('class="card-icon-badge-img"') && badgeHtml.includes("https://cards.scryfall.io/art_crop/"),
+    "14.4 renderCardIconBadgeHtml renders Scryfall thumbnail image with fallback"
+  );
+}
+
+// ============================================================================
+// SECTION 15: LAYOUT, DECK INSPECTOR, SHOP USABILITY & HOVER INSPECTOR WIRING
+// ============================================================================
+console.log("\n=== SECTION 15: LAYOUT, DECK INSPECTOR, SHOP USABILITY & HOVER INSPECTOR ===");
+{
+  resetTestState();
+  startNewRun(STARTER_DECKS[0]);
+
+  // 15.1 Duplicate stacking & category sorting in Deck Inspector
+  const sampleCards = [
+    { ...CARD_DB.forest, uid: "f1" },
+    { ...CARD_DB.forest, uid: "f2" },
+    { ...CARD_DB.forest, uid: "f3", foil: "Foil" },
+    { ...CARD_DB.llanowar_elves, uid: "e1" },
+    { ...CARD_DB.llanowar_elves, uid: "e2" },
+    { ...CARD_DB.lightning_bolt, uid: "b1" }
+  ];
+  const grouped = groupDeckInspectorCards(sampleCards);
+  assert(
+    grouped.length === 4 &&
+    grouped.find(g => g.card.id === "llanowar_elves").count === 2 &&
+    grouped.find(g => g.card.id === "forest" && !g.card.foil).count === 2 &&
+    grouped.find(g => g.card.id === "forest" && g.card.foil === "Foil").count === 1,
+    "15.1 groupDeckInspectorCards stacks identical copies while preserving foiled variants"
+  );
+
+  // 15.2 openDeckInspector renders summary, mana curve, filter tabs, and stacked badges
+  const prevHeadless = state.headless;
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  try {
+    const nodes = {
+      "deck-dialog-title": createMockElement("h2", "deck-dialog-title"),
+      "deck-dialog-desc": createMockElement("p", "deck-dialog-desc"),
+      "deck-dialog-summary": createMockElement("section", "deck-dialog-summary"),
+      "deck-dialog-tabs": createMockElement("div", "deck-dialog-tabs"),
+      "deck-dialog-grid": createMockElement("div", "deck-dialog-grid"),
+      "deck-dialog": createMockElement("dialog", "deck-dialog"),
+      "shop-gold": createMockElement("strong", "shop-gold"),
+      "shop-deck-summary": createMockElement("div", "shop-deck-summary"),
+      "shop-owned-relics-bar": createMockElement("section", "shop-owned-relics-bar"),
+      "shop-relics": createMockElement("div", "shop-relics"),
+      "shop-cards": createMockElement("div", "shop-cards"),
+      "shop-upgrades": createMockElement("div", "shop-upgrades"),
+      "btn-reroll-shop": createMockElement("button", "btn-reroll-shop"),
+      "card-hover-inspector": createMockElement("aside", "card-hover-inspector")
+    };
+    globalThis.document = {
+      getElementById: (id) => nodes[id] || null,
+      querySelector: () => null,
+      querySelectorAll: () => []
+    };
+    globalThis.window = { innerWidth: 1280 };
+    state.headless = false;
+
+    openDeckInspector("Library", "Test Library", sampleCards);
+    assert(
+      nodes["deck-dialog-summary"].innerHTML.includes("MANA CURVE") &&
+      nodes["deck-dialog-summary"].innerHTML.includes("Lands <strong>3</strong>") &&
+      nodes["deck-dialog-tabs"].innerHTML.includes('data-deck-filter="land"') &&
+      nodes["deck-dialog-grid"].innerHTML.includes("×2") &&
+      nodes["deck-dialog-grid"].innerHTML.includes("card-art-frame"),
+      "15.2 openDeckInspector renders stats summary, mana curve, filter tabs, copy badges, and card art"
+    );
+
+    // 15.3 renderShop displays deck ratio, SLOTS FULL when relics are maxed, and inline sell bar
+    generateShopStock(false);
+    const maxSlots = getRelicMaxSlots();
+    state.relics = RELIC_DB.slice(0, maxSlots).map(r => ({ ...r }));
+    state.gold = 99;
+    renderShop();
+    assert(
+      nodes["shop-deck-summary"].innerHTML.includes("Deck: <strong>") &&
+      nodes["shop-relics"].innerHTML.includes("SLOTS FULL") &&
+      nodes["shop-owned-relics-bar"].innerHTML.includes("data-shop-sell-relic=") &&
+      nodes["shop-cards"].innerHTML.includes("data-shop-card-idx="),
+      "15.3 renderShop renders deck Land/Spell ratio, SLOTS FULL label, inline owned relic sell bar, and hover attributes"
+    );
+
+    // 15.4 Hover inspector payload resolution for Shop items, Permanents, and Deck Inspector cards
+    state.playerPermanents = [{ uid: "perm_1", name: "Sylvan Anthem", type: "Enchantment", color: "G", rules: "Creatures you control get +1/+1." }];
+    const shopCardPayload = resolveHoverInspectorPayload({ dataset: { shopCardIdx: "0" } });
+    const shopRelicPayload = resolveHoverInspectorPayload({ dataset: { shopRelicIdx: "0" } });
+    const permPayload = resolveHoverInspectorPayload({ dataset: { permanentUid: "perm_1" } });
+    const deckPayload = resolveHoverInspectorPayload({ dataset: { deckInspectorIdx: "0" } });
+    assert(
+      shopCardPayload && shopCardPayload.badge.includes("SANCTUM SHOP") &&
+      shopRelicPayload && shopRelicPayload.data.isRelic === true &&
+      permPayload && permPayload.data.name === "Sylvan Anthem" &&
+      deckPayload && deckPayload.badge.includes("DECK INSPECTOR"),
+      "15.4 resolveHoverInspectorPayload resolves shop cards, shop relics, active permanents, and deck inspector cards"
+    );
+
+    showCardHoverInspector(shopRelicPayload.data);
+    assert(
+      nodes["card-hover-inspector"].innerHTML.includes("Command Zone Relic"),
+      "15.5 showCardHoverInspector renders Command Zone Relics cleanly"
+    );
+  } finally {
+    state.headless = prevHeadless;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+  }
 }
 
 console.log(`\n========================================`);

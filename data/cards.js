@@ -72,6 +72,26 @@ const CARD_DB = {
     manaCost: "", produces: ["W", "U"],
     rules: "Dual Land — Tap: Add {W} or {U}."
   },
+  watery_grave: {
+    id: "watery_grave", name: "Gloomtide Depths", type: "Land", subtype: "Dual", color: "L",
+    manaCost: "", produces: ["U", "B"],
+    rules: "Dual Land — Tap: Add {U} or {B}."
+  },
+  godless_shrine: {
+    id: "godless_shrine", name: "Duskchoir Basilica", type: "Land", subtype: "Dual", color: "L",
+    manaCost: "", produces: ["W", "B"],
+    rules: "Dual Land — Tap: Add {W} or {B}."
+  },
+  temple_garden: {
+    id: "temple_garden", name: "Verdant Sanctum", type: "Land", subtype: "Dual", color: "L",
+    manaCost: "", produces: ["G", "W"],
+    rules: "Dual Land — Tap: Add {G} or {W}."
+  },
+  breeding_pool: {
+    id: "breeding_pool", name: "Tidewood Spring", type: "Land", subtype: "Dual", color: "L",
+    manaCost: "", produces: ["G", "U"],
+    rules: "Dual Land — Tap: Add {G} or {U}."
+  },
   wastes: {
     id: "wastes", name: "Wastes", type: "Land", subtype: "Basic", color: "C",
     manaCost: "", produces: ["C"],
@@ -482,6 +502,167 @@ const CARD_DB = {
     power: 5, toughness: 5, keywords: ["Trample", "Haste"],
     etb: "battlesphere",
     rules: "Trample, Haste. ETB: Create three 1/1 Colorless Shard Construct tokens with Haste and gain +2 Resonance!"
+  },
+
+  // === AZORIUS ({W}/{U}) — BLINK & AERIAL TEMPO ===
+  ephemerate: {
+    id: "ephemerate", name: "Aether Blink", type: "Instant", color: "W",
+    manaCost: "{W}",
+    keywords: ["Blink", "Draw 1"],
+    effect: "ephemerate",
+    rules: "Blink your strongest Creature with an ETB (re-triggering its ETB!), draw 1 card, and gain +2 Resonance."
+  },
+  azorius_skyguard: {
+    id: "azorius_skyguard", name: "Cloudspire Skyguard", type: "Creature", subtype: "Knight", color: "W",
+    manaCost: "{1}{W}{U}",
+    power: 3, toughness: 2, keywords: ["Flying", "Lifelink", "Haste"],
+    etb: "skyguard",
+    rules: "Flying, Lifelink, Haste. ETB: Freeze the strongest Enemy Blocker and gain +1 Resonance."
+  },
+  cloudblazer: {
+    id: "cloudblazer", name: "Skyvault Oracle", type: "Creature", subtype: "Wizard", color: "U",
+    manaCost: "{2}{W}{U}",
+    power: 3, toughness: 3, keywords: ["Flying", "Haste"],
+    etb: "cloudblazer",
+    rules: "Flying, Haste. ETB: Heal 2 Life, draw 2 cards, and gain +2 Resonance."
+  },
+
+  // === DIMIR ({U}/{B}) — SELF-MILL, FREEZE & GRAVEBORN ===
+  thought_scour: {
+    id: "thought_scour", name: "Abyssal Scour", type: "Instant", color: "U",
+    manaCost: "{U}",
+    keywords: ["Dredge", "Freeze"],
+    effect: "thought_scour",
+    rules: "Mill 3 cards into your Graveyard, freeze an Enemy Blocker, draw 1 card, and gain +1 Resonance."
+  },
+  dimir_informant: {
+    id: "dimir_informant", name: "Gloomtide Whisperer", type: "Creature", subtype: "Rogue", color: "U",
+    manaCost: "{1}{U}",
+    power: 2, toughness: 2, keywords: ["Flying", "Dredge"],
+    etb: "dimir_informant",
+    rules: "Flying. ETB: Mill 3 cards, draw 1 card, and gain +1 Resonance."
+  },
+  nightveil_specter: {
+    id: "nightveil_specter", name: "Nightveil Reaper", type: "Creature", subtype: "Specter", color: "B",
+    manaCost: "{1}{U}{B}",
+    power: 3, toughness: 3, keywords: ["Flying", "Deathtouch", "Haste"],
+    etb: "nightveil",
+    rules: "Flying, Deathtouch, Haste. ETB: Mill 2 cards, permanently gain +1/+1 per Creature in Graveyard (max +4/+4), and +1 Resonance."
+  },
+
+  // === ORZHOV ({W}/{B}) — LIFEGAIN & ARISTOCRAT DRAIN ===
+  cruel_celebrant: {
+    id: "cruel_celebrant", name: "Duskchoir Celebrant", type: "Creature", subtype: "Vampire", color: "B",
+    manaCost: "{W}{B}",
+    power: 2, toughness: 2, keywords: ["Lifelink", "Haste"],
+    etb: "celebrant",
+    rules: "Lifelink, Haste. ETB: Create a 1/1 White Spirit token with Flying & Haste, heal 2 Life, and deal +2 Burn Power."
+  },
+  lingering_souls: {
+    id: "lingering_souls", name: "Vesper Procession", type: "Sorcery", color: "W",
+    manaCost: "{2}{W}",
+    keywords: ["Tokens", "Flying"],
+    effect: "lingering_souls",
+    rules: "Create two 1/1 White Spirit tokens with Flying & Haste, heal 2 Life, and gain +1 Resonance."
+  },
+  blood_baron: {
+    id: "blood_baron", name: "Oathsworn Prelate", type: "Creature", subtype: "Vampire", color: "W",
+    manaCost: "{2}{W}{B}",
+    power: 4, toughness: 4, keywords: ["Flying", "Lifelink", "Haste"],
+    etb: "blood_baron",
+    rules: "Flying, Lifelink, Haste. ETB: Heal 4 Life, deal +4 Burn Power, and gain +2 Resonance."
+  },
+
+  // === SELESNYA ({G}/{W}) — WIDE TOKENS & COUNTERS ===
+  selesnya_charm: {
+    id: "selesnya_charm", name: "Verdant Call", type: "Instant", color: "G",
+    manaCost: "{G}{W}",
+    keywords: ["Tokens"],
+    effect: "selesnya_charm",
+    rules: "Create two 2/2 Green Knight tokens with Haste and gain +1 Resonance."
+  },
+  conclave_mentor: {
+    id: "conclave_mentor", name: "Grove Mentor", type: "Creature", subtype: "Centaur", color: "G",
+    manaCost: "{1}{G}{W}",
+    power: 3, toughness: 3, keywords: ["Trample", "Haste"],
+    etb: "conclave_mentor",
+    rules: "Trample, Haste. ETB: Permanently put +1/+1 on ALL Creatures you control and heal 2 Life."
+  },
+  trostani_discordant: {
+    id: "trostani_discordant", name: "Verdant Matriarch", type: "Creature", subtype: "Dryad", color: "W",
+    manaCost: "{2}{G}{W}",
+    power: 3, toughness: 5, keywords: ["Lifelink", "Haste"],
+    etb: "trostani",
+    rules: "Lifelink, Haste. ETB: Create two 2/2 White Soldier tokens with Lifelink & Haste, heal 3 Life, and gain +2 Resonance."
+  },
+
+  // === PERSISTENT ENCHANTMENTS & ARTIFACTS (BOARD PERMANENTS) ===
+  glorious_anthem: {
+    id: "glorious_anthem", name: "Radiant Anthem", type: "Enchantment", subtype: "Aura", color: "W",
+    manaCost: "{1}{W}",
+    keywords: ["Permanent", "Anthem"],
+    permanentEffect: "glorious_anthem",
+    rules: "Enchantment — Stays on battlefield. All Creatures you control get +2/+2 during combat and +1 Resonance each turn."
+  },
+  fervor_banner: {
+    id: "fervor_banner", name: "Warcaller's Standard", type: "Enchantment", subtype: "Banner", color: "R",
+    manaCost: "{1}{R}",
+    keywords: ["Permanent", "Haste"],
+    permanentEffect: "fervor_banner",
+    rules: "Enchantment — Stays on battlefield. Creatures you cast gain Haste and deal +2 Burn Power when entering."
+  },
+  rhystic_archive: {
+    id: "rhystic_archive", name: "Aetherial Archive", type: "Enchantment", subtype: "Archive", color: "U",
+    manaCost: "{1}{U}",
+    keywords: ["Permanent", "Draw 1"],
+    permanentEffect: "rhystic_archive",
+    rules: "Enchantment — Stays on battlefield. At the start of each turn, draw 1 extra card and gain +1 Resonance."
+  },
+  phyrexian_arena: {
+    id: "phyrexian_arena", name: "Obsidian Pact", type: "Enchantment", subtype: "Pact", color: "B",
+    manaCost: "{1}{B}",
+    keywords: ["Permanent", "Draw 1"],
+    permanentEffect: "phyrexian_arena",
+    rules: "Enchantment — Stays on battlefield. At the start of each turn, lose 1 Life (min 1), draw 1 extra card, and gain +2 Resonance."
+  },
+  hardened_scales: {
+    id: "hardened_scales", name: "Primal Leyline", type: "Enchantment", subtype: "Leyline", color: "G",
+    manaCost: "{1}{G}",
+    keywords: ["Permanent", "Landfall"],
+    permanentEffect: "hardened_scales",
+    rules: "Enchantment — Stays on battlefield. Landfall: Put +1/+1 on ALL Creatures you control and gain +1 Resonance."
+  },
+  arcane_signet: {
+    id: "arcane_signet", name: "Aether Signet", type: "Artifact", subtype: "Mana Rock", color: "C",
+    manaCost: "{2}",
+    keywords: ["Permanent", "Mana"],
+    permanentEffect: "arcane_signet",
+    rules: "Artifact — Stays on battlefield. ETB & Start of Turn: Add +1 Any-Color Wild Mana and +1 Resonance."
+  },
+  gilded_lotus_relic: {
+    id: "gilded_lotus_relic", name: "Sunstone Dynamo", type: "Artifact", subtype: "Dynamo", color: "C",
+    manaCost: "{3}",
+    keywords: ["Permanent", "Mana"],
+    permanentEffect: "gilded_lotus_relic",
+    rules: "Artifact — Stays on battlefield. ETB & Start of Turn: Add {C}{C} and +1 Any-Color Wild Mana."
+  },
+  altar_of_ash: {
+    id: "altar_of_ash", name: "Ashvein Altar", type: "Artifact", subtype: "Altar", color: "C",
+    manaCost: "{2}",
+    keywords: ["Permanent", "Graveyard"],
+    permanentEffect: "altar_of_ash",
+    rules: "Artifact — Stays on battlefield. Whenever a Creature enters or goes to your Graveyard, gain +1 Resonance and +2 Burn Power."
+  },
+
+  // === BOSS CURSE / BLIGHT CARD (UNCOLLECTIBLE) ===
+  blight_curse: {
+    id: "blight_curse", name: "Rift Blight", type: "Curse", subtype: "Blight", color: "B",
+    manaCost: "{1}",
+    keywords: ["Curse"],
+    isCurse: true,
+    uncollectible: true,
+    effect: "purge_curse",
+    rules: "Curse — Clogs your hand. Cast for {1} to purge it from this encounter (does not go to Graveyard)."
   }
 };
 
@@ -502,6 +683,30 @@ const CARD_EVOLUTION_OPTIONS = [
     powerBonus: 1,
     toughnessBonus: 1,
     keywords: ["Trample"]
+  },
+  {
+    id: "swiftstrike",
+    name: "Tempest Reflex",
+    desc: "Permanently gain +1/+1 and Haste.",
+    powerBonus: 1,
+    toughnessBonus: 1,
+    keywords: ["Haste"]
+  },
+  {
+    id: "duelist",
+    name: "Twinblade Mastery",
+    desc: "Permanently gain +0/+1 and Double Strike.",
+    powerBonus: 0,
+    toughnessBonus: 1,
+    keywords: ["Double Strike"]
+  },
+  {
+    id: "lifebound",
+    name: "Radiant Soul",
+    desc: "Permanently gain +2/+2 and Lifelink.",
+    powerBonus: 2,
+    toughnessBonus: 2,
+    keywords: ["Lifelink"]
   }
 ];
 
@@ -550,6 +755,18 @@ const LAND_ENHANCEMENT_OPTIONS = [
     name: "Prismatic",
     icon: "🌈",
     desc: "Taps for ANY color of mana and counts as all 5 colors for Prismatic Court."
+  },
+  {
+    id: "verdant",
+    name: "Verdant",
+    icon: "🌿",
+    desc: "When tapped: Heal 1 Life and give your strongest Creature +1/+1 until end of turn."
+  },
+  {
+    id: "aetherial",
+    name: "Aetherial",
+    icon: "🔮",
+    desc: "When tapped: Add +1 bonus {C} Mana (once per turn) or +1 Resonance."
   }
 ];
 
@@ -782,6 +999,102 @@ const STARTER_DECKS = [
       ...Array(2).fill("unsummon"),
       ...Array(2).fill("colossal_dreadmaw")
     ]
+  },
+  {
+    id: "azorius_blink",
+    name: "Skyvault Blink & Fliers ({W}/{U})",
+    badge: "Skyvault Blink ({W}/{U})",
+    colors: ["W", "U"],
+    startingRelic: "panharmonicon",
+    desc: "Control the skies with Flying ETB creatures, blink them with Aether Blink to double triggers, and lock down blockers with freeze & bounce.",
+    cards: [
+      ...Array(5).fill("plains"),
+      ...Array(5).fill("island"),
+      ...Array(3).fill("hallowed_fountain"),
+      ...Array(4).fill("evolving_wilds"),
+      ...Array(3).fill("esper_sentinel"),
+      ...Array(3).fill("tideglass_sentry"),
+      ...Array(3).fill("azorius_skyguard"),
+      ...Array(2).fill("cloudblazer"),
+      ...Array(3).fill("ephemerate"),
+      ...Array(2).fill("swords_to_plowshares"),
+      ...Array(2).fill("frost_breath"),
+      ...Array(2).fill("rhystic_archive"),
+      ...Array(2).fill("serra_angel"),
+      ...Array(1).fill("tempest_djinn")
+    ]
+  },
+  {
+    id: "dimir_dredge",
+    name: "Gloomtide Mill & Control ({U}/{B})",
+    badge: "Gloomtide Control ({U}/{B})",
+    colors: ["U", "B"],
+    startingRelic: "crucible_of_worlds",
+    desc: "Fill your Graveyard with Abyssal Scour & Gloomtide Whisperer, freeze enemy blockers, and revive Dread Sovereign or scale Nightveil Reaper.",
+    cards: [
+      ...Array(5).fill("island"),
+      ...Array(5).fill("swamp"),
+      ...Array(3).fill("watery_grave"),
+      ...Array(4).fill("evolving_wilds"),
+      ...Array(3).fill("stitchers_supplier"),
+      ...Array(3).fill("dimir_informant"),
+      ...Array(3).fill("thought_scour"),
+      ...Array(3).fill("nightveil_specter"),
+      ...Array(2).fill("vampire_nighthawk"),
+      ...Array(2).fill("frost_breath"),
+      ...Array(2).fill("reanimate"),
+      ...Array(2).fill("phyrexian_arena"),
+      ...Array(1).fill("unsummon"),
+      ...Array(2).fill("archon_of_cruelty")
+    ]
+  },
+  {
+    id: "orzhov_aristocrats",
+    name: "Duskchoir Drain & Sacrifice ({W}/{B})",
+    badge: "Duskchoir Drain ({W}/{B})",
+    colors: ["W", "B"],
+    startingRelic: "heliod_sun_crowned",
+    desc: "Pair lifegain triggers with Duskchoir Celebrant, Vesper Procession spirits, and Grim Tithe sacrifice draw to snowball Crown of the Solstice.",
+    cards: [
+      ...Array(5).fill("plains"),
+      ...Array(5).fill("swamp"),
+      ...Array(3).fill("godless_shrine"),
+      ...Array(4).fill("evolving_wilds"),
+      ...Array(3).fill("dawnbell_acolyte"),
+      ...Array(3).fill("cruel_celebrant"),
+      ...Array(3).fill("ajani_pridemate"),
+      ...Array(2).fill("vampire_nighthawk"),
+      ...Array(3).fill("lingering_souls"),
+      ...Array(2).fill("village_rites"),
+      ...Array(2).fill("swords_to_plowshares"),
+      ...Array(2).fill("glorious_anthem"),
+      ...Array(2).fill("blood_baron"),
+      ...Array(1).fill("archon_of_cruelty")
+    ]
+  },
+  {
+    id: "selesnya_tokens",
+    name: "Verdant Convoke & Tokens ({G}/{W})",
+    badge: "Verdant Tokens ({G}/{W})",
+    colors: ["G", "W"],
+    startingRelic: "hive_mind",
+    desc: "Flood the board with Knights, Soldiers, and Insects, scale permanently with Grove Mentor & Primal Leyline, and finish with Primal Stampede.",
+    cards: [
+      ...Array(5).fill("forest"),
+      ...Array(5).fill("plains"),
+      ...Array(3).fill("temple_garden"),
+      ...Array(4).fill("evolving_wilds"),
+      ...Array(3).fill("llanowar_elves"),
+      ...Array(3).fill("scute_swarm"),
+      ...Array(3).fill("selesnya_charm"),
+      ...Array(3).fill("conclave_mentor"),
+      ...Array(2).fill("sunlit_rally"),
+      ...Array(2).fill("unbreakable_formation"),
+      ...Array(2).fill("hardened_scales"),
+      ...Array(2).fill("glorious_anthem"),
+      ...Array(2).fill("trostani_discordant"),
+      ...Array(1).fill("overrun")
+    ]
   }
 ];
 
@@ -843,6 +1156,27 @@ const CONSUMABLE_DB = [
     icon: "🎡",
     cost: 4,
     desc: "Sacrifice: Discard your Hand, draw 5 fresh cards, and gain +2 Resonance."
+  },
+  {
+    id: "mirror_scroll",
+    name: "Rift Mirror",
+    icon: "🪞",
+    cost: 5,
+    desc: "Sacrifice: Clone your strongest Creature on the battlefield with Haste and gain +1 Resonance."
+  },
+  {
+    id: "transmute_relic",
+    name: "Alchemist's Sigil",
+    icon: "⚗️",
+    cost: 5,
+    desc: "Sacrifice: Transmute your rightmost Relic into a random unowned Rare Relic and gain +$4 Gold (or +3 Resonance if none)."
+  },
+  {
+    id: "aether_overdrive",
+    name: "Overdrive Scroll",
+    icon: "⚡",
+    cost: 4,
+    desc: "Sacrifice: All Creatures you control gain +2/+2, Haste, and Trample this turn, plus +2 Resonance."
   }
 ];
 
@@ -862,10 +1196,13 @@ const ENCOUNTERS = [
   },
   {
     plane: 1, tier: "PLANAR OVERLORD", name: "Vaelor, the Dusk Sovereign", maxLife: 165, reward: 11,
-    rule: "DUSK STAX: Spawns a 3/4 Blocker each turn, drains 1 Life/turn (healing Vaelor), and halves direct Burn Power.",
+    rule: "DUSK STAX: Spawns a 3/4 Blocker each turn, drains 1 Life/turn, halves Burn. Turn 3 Surge: Shuffles a Rift Blight Curse into your Library!",
     spawn: { name: "Dusk Enforcer", power: 3, toughness: 4, color: "B", keywords: [] },
     staxDrain: 1,
-    burnResistance: 0.5
+    burnResistance: 0.5,
+    surgeTurn: 3,
+    surgeCurse: 1,
+    surgeLabel: "Dusk Blight (Shuffles Rift Blight Curse into Library)"
   },
   {
     plane: 2, tier: "SKIRMISH WARD", name: "Zephyra, Storm Herald", maxLife: 245, reward: 12,
@@ -882,12 +1219,105 @@ const ENCOUNTERS = [
   },
   {
     plane: 2, tier: "PLANAR OVERLORD", name: "Aurelia, the Radiant Arbiter", maxLife: 600, reward: 16,
-    rule: "RADIANT AURA: Spawns a 4/5 Radiant Guard each turn. Reinforces with an extra Guard on even turns!",
+    rule: "RADIANT AURA: Spawns a 4/5 Radiant Guard each turn (extra on even turns). Turn 3 Surge: +3 Boss Strike & +1/+1 to all Guards!",
     spawn: { name: "Radiant Guard", power: 4, toughness: 4, color: "W", keywords: [], count: 1 },
     cenobiteAura: 1,
-    evenTurnBonusGuard: 1
+    evenTurnBonusGuard: 1,
+    surgeTurn: 3,
+    surgeStrike: 3,
+    surgeBuff: 1,
+    surgeLabel: "Radiant Judgment (+3 Boss Strike & +1/+1 to Guards)"
   }
 ];
+
+// === ESCALATING ENDLESS MUTATORS & ASCENSION LADDER ===
+const ENDLESS_MUTATORS = [
+  {
+    minLoop: 1,
+    id: "hardened_vanguard",
+    name: "Hardened Vanguard",
+    icon: "🛡️",
+    desc: "Enemy Blockers spawn with +1/+1."
+  },
+  {
+    minLoop: 2,
+    id: "aether_inflation",
+    name: "Aether Inflation",
+    icon: "💰",
+    desc: "Shop rerolls cost +$1 Gold."
+  },
+  {
+    minLoop: 3,
+    id: "collapsing_clock",
+    name: "Collapsing Clock",
+    icon: "⏳",
+    desc: "Turn Clock reduced by 1 (min 3 turns)."
+  },
+  {
+    minLoop: 4,
+    id: "relentless_tide",
+    name: "Relentless Tide",
+    icon: "🌊",
+    desc: "+1 extra Enemy Blocker spawns on Turn 1."
+  }
+];
+
+function getActiveEndlessMutators(loop = 0) {
+  const safeLoop = Math.max(0, Math.floor(Number(loop) || 0));
+  return ENDLESS_MUTATORS.filter(m => safeLoop >= m.minLoop);
+}
+
+const ASCENSION_LEVELS = [
+  {
+    level: 0,
+    name: "Ascension 0 (Standard)",
+    desc: "Standard encounter scaling and starting Life.",
+    bossHpMult: 1,
+    enemyToughnessBonus: 0,
+    startLifeDelta: 0,
+    startingGoldBonus: 0,
+    requiredClears: 0
+  },
+  {
+    level: 1,
+    name: "Ascension 1 (Adept)",
+    desc: "Bosses have +15% HP. Begin with +$2 Gold.",
+    bossHpMult: 1.15,
+    enemyToughnessBonus: 0,
+    startLifeDelta: 0,
+    startingGoldBonus: 2,
+    requiredClears: 1
+  },
+  {
+    level: 2,
+    name: "Ascension 2 (Planeswalker)",
+    desc: "Bosses +15% HP & Enemy Blockers gain +0/+1 Toughness. Begin with +$2 Gold.",
+    bossHpMult: 1.15,
+    enemyToughnessBonus: 1,
+    startLifeDelta: 0,
+    startingGoldBonus: 2,
+    requiredClears: 2
+  },
+  {
+    level: 3,
+    name: "Ascension 3 (Archmage)",
+    desc: "Bosses +25% HP, Enemy Blockers +0/+1, and start runs at 16 Life. Begin with +$3 Gold.",
+    bossHpMult: 1.25,
+    enemyToughnessBonus: 1,
+    startLifeDelta: -4,
+    startingGoldBonus: 3,
+    requiredClears: 3
+  }
+];
+
+function getAscensionDefinition(level = 0) {
+  const num = Math.max(0, Math.min(ASCENSION_LEVELS.length - 1, Math.floor(Number(level) || 0)));
+  return ASCENSION_LEVELS[num] || ASCENSION_LEVELS[0];
+}
+
+function normalizeAscensionLevel(level) {
+  return getAscensionDefinition(level).level;
+}
 
 const RUN_CHALLENGES = [
   {
@@ -1112,10 +1542,13 @@ const CAMPAIGN_DEFINITIONS = [
       },
       {
         plane: 1, tier: "PLANAR OVERLORD", name: "Shardbound Tyrant", maxLife: 158, reward: 11,
-        rule: "SHARD DRAIN: Spawns a 3/4 Shard Sentinel, drains 1 Life each turn, and resists half of direct Burn.",
+        rule: "SHARD DRAIN: Spawns a 3/4 Shard Sentinel, drains 1 Life/turn, resists half Burn. Turn 3 Surge: Shuffles a Rift Blight Curse into your Library!",
         spawn: { name: "Shard Sentinel", power: 3, toughness: 4, color: "C", keywords: [] },
         staxDrain: 1,
-        burnResistance: 0.5
+        burnResistance: 0.5,
+        surgeTurn: 3,
+        surgeCurse: 1,
+        surgeLabel: "Shard Blight (Shuffles Rift Blight Curse into Library)"
       },
       {
         plane: 2, tier: "SKIRMISH WARD", name: "Aetherstorm Sentinel", maxLife: 232, reward: 12,
@@ -1132,11 +1565,15 @@ const CAMPAIGN_DEFINITIONS = [
       },
       {
         plane: 2, tier: "PLANAR OVERLORD", name: "The Void Architect", maxLife: 570, reward: 18,
-        rule: "VOID ENGINE: Spawns a 4/5 Void Guard each turn, reinforces on even turns, drains 1 Life, and resists half of direct Burn.",
+        rule: "VOID ENGINE: Spawns a 4/5 Void Guard each turn (extra on even turns), drains 1 Life, resists half Burn. Turn 3 Surge: +3 Boss Strike & +1/+1 to Guards!",
         spawn: { name: "Void Guard", power: 4, toughness: 5, color: "C", keywords: [], count: 1 },
         staxDrain: 1,
         burnResistance: 0.5,
-        evenTurnBonusGuard: 1
+        evenTurnBonusGuard: 1,
+        surgeTurn: 3,
+        surgeStrike: 3,
+        surgeBuff: 1,
+        surgeLabel: "Void Collapse (+3 Boss Strike & +1/+1 to Guards)"
       }
     ],
     routeNodes: CAMPAIGN_ROUTE_NODES.map(node => {

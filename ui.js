@@ -1091,76 +1091,169 @@ function getCardPlayabilityInfo(card) {
 }
 
 function getCardArtTheme(c) {
+  if (!c) return "arcane_spell";
   const name = String(c.name || "").toLowerCase();
   const sub = String(c.subtype || "").toLowerCase();
   const type = String(c.type || "").toLowerCase();
   const col = c.color || "C";
+  const eff = String(c.effect || "").toLowerCase();
 
-  if (type === "land" || Array.isArray(c.produces)) {
+  if (type === "curse" || c.isCurse) return "curse";
+  if (type === "enchantment") return "enchantment";
+  if (type === "artifact") return "artifact";
+
+  if (type === "land" || (Array.isArray(c.produces) && c.produces.length > 0) || c.isFetch) {
     if (c.isFetch || sub.includes("fetch")) return "fetch";
+    if (c.fused || sub.includes("fused")) return "fused";
     if ((c.produces && c.produces.length > 1) || sub.includes("dual")) return "dual";
     if (col === "G") return "forest";
     if (col === "R") return "mountain";
     if (col === "B") return "swamp";
     if (col === "U") return "island";
     if (col === "W") return "plains";
-    if (col === "C") return "construct";
+    if (col === "C") return "wastes";
     return "dual";
   }
-  if (name.includes("dragon") || sub.includes("dragon") || name.includes("hellkite")) return "dragon";
-  if (name.includes("goblin") || sub.includes("goblin") || name.includes("krenko")) return "goblin";
-  if (name.includes("angel") || sub.includes("angel") || name.includes("serra") || name.includes("archangel")) return "angel";
-  if (name.includes("vampire") || name.includes("demon") || name.includes("archfiend") || name.includes("wurm") || name.includes("grave") || name.includes("obliterator")) return "vampire";
-  if (name.includes("bird") || name.includes("drake") || name.includes("phoenix") || name.includes("hawk") || (c.keywords && c.keywords.includes("Flying") && col === "U")) return "bird";
-  if (name.includes("mage") || name.includes("wizard") || name.includes("prodigy") || name.includes("delver") || name.includes("pyromancer")) return "wizard";
+
+  // Creature subtypes & iconic silhouettes
+  if (sub.includes("dragon") || name.includes("dragon") || name.includes("wyrm")) return "dragon";
+  if (sub.includes("goblin") || name.includes("goblin")) return "goblin";
+  if (sub.includes("angel") || name.includes("seraph") || name.includes("angel")) return "angel";
+  if (sub.includes("vampire") || name.includes("vampire") || name.includes("duskfang") || name.includes("prelate")) return "vampire";
+  if (sub.includes("archon") || name.includes("sovereign")) return "archon";
+  if (sub.includes("zombie") || name.includes("harvester")) return "zombie";
+  if (sub.includes("specter") || name.includes("reaper")) return "specter";
+  if (sub.includes("nightmare") || name.includes("sculptor")) return "nightmare";
+  if (sub.includes("bird") || name.includes("owl") || name.includes("drake") || name.includes("hawk")) return "bird";
+  if (sub.includes("wizard") || name.includes("wizard") || name.includes("seeker") || name.includes("oracle")) return "wizard";
+  if (sub.includes("djinn") || name.includes("djinn")) return "djinn";
+  if (sub.includes("elf") || name.includes("leyweaver")) return "elf";
+  if (sub.includes("snake") || name.includes("viper") || name.includes("cobra")) return "snake";
+  if (sub.includes("insect") || name.includes("brood") || name.includes("insect")) return "insect";
+  if (sub.includes("dinosaur") || name.includes("titan") || name.includes("hydra")) return "dinosaur";
+  if (sub.includes("spider") || name.includes("spider")) return "spider";
+  if (sub.includes("spirit") || name.includes("spirit") || name.includes("wisp")) return "spirit";
+  if (sub.includes("knight") || name.includes("knight") || name.includes("skyguard")) return "knight";
+  if (sub.includes("soldier") || name.includes("soldier") || name.includes("warden") || name.includes("vanguard") || name.includes("guard")) return "soldier";
+  if (sub.includes("cleric") || name.includes("acolyte")) return "cleric";
+  if (sub.includes("giant") || name.includes("colossus")) return "giant";
+  if (sub.includes("centaur") || name.includes("mentor")) return "centaur";
+  if (sub.includes("dryad") || name.includes("matriarch")) return "dryad";
+  if (sub.includes("monk") || name.includes("adept")) return "monk";
+  if (sub.includes("rogue") || name.includes("daredevil") || name.includes("whisperer") || name.includes("raider")) return "rogue";
+  if (sub.includes("scout") || sub.includes("satyr") || name.includes("sentry") || name.includes("forager") || name.includes("cartographer") || name.includes("pathbreaker")) return "scout";
+  if (sub.includes("construct") || name.includes("construct") || name.includes("drone") || name.includes("regent") || name.includes("crusher") || name.includes("juggernaut")) return "construct";
+  if (sub.includes("beast") || name.includes("wolf") || name.includes("behemoth")) return "beast";
+
   if (type === "creature" || c.power !== undefined) {
     if (col === "G") return "beast";
     if (col === "R") return "dragon";
     if (col === "B") return "vampire";
-    if (col === "U") return "wizard";
-    if (col === "W") return "angel";
+    if (col === "U") return "bird";
+    if (col === "W") return "soldier";
     return "construct";
   }
+
+  // Spells by mechanical school
+  if (eff.includes("ephemerate") || name.includes("blink")) return "blink_spell";
+  if (eff.includes("goblins") || eff.includes("rally") || eff.includes("reinforcements") || eff.includes("souls") || eff.includes("charm") || eff.includes("foundry") || eff.includes("spider")) return "token_spell";
   if (col === "R") return "fire_spell";
   if (col === "B") return "necro_spell";
   if (col === "G") return "nature_spell";
   if (col === "U") return "arcane_spell";
   if (col === "W") return "holy_spell";
+  if (col === "C") return "artifact";
   return "arcane_spell";
 }
 
 const ART_SVG_PATHS = {
-  forest: `<path d="M24 4L10 22h8l-6 14h24l-6-14h8L24 4zm0 32v8" stroke="currentColor" stroke-width="2.2" fill="currentColor" fill-opacity="0.28" stroke-linejoin="round"/>`,
-  mountain: `<path d="M4 38L18 10l9 16 7-11 10 23H4z" stroke="currentColor" stroke-width="2.2" fill="currentColor" fill-opacity="0.28" stroke-linejoin="round"/><path d="M18 10l-4 8 4 3 4-3-4-8z" fill="currentColor" fill-opacity="0.55"/>`,
-  swamp: `<path d="M28 8a14 14 0 1 0 0 28 11 11 0 0 1 0-28z" fill="currentColor" fill-opacity="0.32" stroke="currentColor" stroke-width="2"/><path d="M6 38h36M12 42h24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>`,
-  island: `<path d="M6 32c5-6 11-6 16 0s11 6 16 0M6 39c5-5 11-5 16 0s11 5 16 0M24 7l-7 17h14L24 7z" stroke="currentColor" stroke-width="2.2" fill="currentColor" fill-opacity="0.26" stroke-linecap="round" stroke-linejoin="round"/>`,
-  plains: `<circle cx="24" cy="24" r="8" fill="currentColor" fill-opacity="0.38" stroke="currentColor" stroke-width="2.2"/><path d="M24 4v6m0 28v6M4 24h6m28 0h6M10 10l4 4m20 20l4 4M38 10l-4 4M14 34l-4 4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>`,
-  fetch: `<polygon points="24,4 29,18 44,24 29,30 24,44 19,30 4,24 19,18" fill="currentColor" fill-opacity="0.28" stroke="currentColor" stroke-width="2.2"/><circle cx="24" cy="24" r="4" fill="currentColor"/>`,
-  dual: `<circle cx="19" cy="24" r="11" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2"/><circle cx="29" cy="24" r="11" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2"/>`,
-  dragon: `<path d="M24 6L8 18l6 4-8 12 18-6 18 6-8-12 6-4L24 6z" fill="currentColor" fill-opacity="0.32" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><circle cx="24" cy="20" r="3" fill="currentColor"/>`,
-  goblin: `<path d="M12 36L36 8l-4 14 8 2L14 40l4-12-6 8z" fill="currentColor" fill-opacity="0.34" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/>`,
-  angel: `<path d="M24 12c-7-8-18-4-18 6 0 7 8 11 18 20 10-9 18-13 18-20 0-10-11-14-18-6z" fill="currentColor" fill-opacity="0.28" stroke="currentColor" stroke-width="2.2"/><ellipse cx="24" cy="7" rx="9" ry="2.6" fill="none" stroke="currentColor" stroke-width="2"/>`,
-  vampire: `<path d="M14 8h20l-3 16a7 7 0 0 1-14 0L14 8zm10 23v9m-7 0h14" fill="currentColor" fill-opacity="0.28" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`,
-  wizard: `<path d="M6 24s7-12 18-12 18 12 18 12-7 12-18 12S6 24 6 24z" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2.2"/><circle cx="24" cy="24" r="5.5" fill="currentColor"/>`,
-  beast: `<path d="M10 36c2-12 9-22 14-28 5 6 12 16 14 28-6-5-10-7-14-7s-8 2-14 7z" fill="currentColor" fill-opacity="0.32" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>`,
-  bird: `<path d="M4 22c8-10 15-10 20-2 5-8 12-8 20 2-7 2-13 6-20 14-7-8-13-12-20-14z" fill="currentColor" fill-opacity="0.3" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>`,
-  construct: `<polygon points="24,6 40,15 40,33 24,42 8,33 8,15" fill="currentColor" fill-opacity="0.25" stroke="currentColor" stroke-width="2.2"/><circle cx="24" cy="24" r="6" fill="none" stroke="currentColor" stroke-width="2"/>`,
-  fire_spell: `<path d="M26 4L10 26h12l-4 18 18-22H24L26 4z" fill="currentColor" fill-opacity="0.38" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>`,
-  necro_spell: `<circle cx="24" cy="20" r="12" fill="currentColor" fill-opacity="0.26" stroke="currentColor" stroke-width="2.2"/><path d="M18 31v9h12v-9M20 19h2m4 0h2" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>`,
-  nature_spell: `<path d="M38 10C20 10 10 20 10 38c18 0 28-10 28-28zM10 38L28 20" fill="currentColor" fill-opacity="0.3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>`,
-  arcane_spell: `<polygon points="24,5 29,17 42,19 32,28 35,41 24,34 13,41 16,28 6,19 19,17" fill="currentColor" fill-opacity="0.28" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/>`,
-  holy_spell: `<path d="M24 4v40M8 20h32" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/><circle cx="24" cy="20" r="9" fill="currentColor" fill-opacity="0.25" stroke="currentColor" stroke-width="2"/>`
+  // Lands
+  forest: `<path d="M24 5L12 20h7l-6 13h22l-6-13h7L24 5z" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M24 14v27M18 41h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>`,
+  mountain: `<path d="M5 38L18 11l8 15 6-10 11 22H5z" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M18 11l-4 9 4 2 4-2-4-9z" fill="currentColor" fill-opacity="0.5"/>`,
+  swamp: `<path d="M28 9a13 13 0 1 0 0 26 10 10 0 0 1 0-26z" fill="currentColor" fill-opacity="0.26" stroke="currentColor" stroke-width="2"/><path d="M8 38h32M14 42h20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>`,
+  island: `<path d="M24 7l-6 16h12L24 7z" fill="currentColor" fill-opacity="0.25" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M6 31c5-5 11-5 16 0s11 5 16 0M8 38c4-4 10-4 14 0s10 4 14 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>`,
+  plains: `<circle cx="24" cy="24" r="7.5" fill="currentColor" fill-opacity="0.3" stroke="currentColor" stroke-width="2"/><path d="M24 5v6m0 26v6M5 24h6m26 0h6M11 11l4 4m18 18l4 4M37 11l-4 4M15 33l-4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>`,
+  wastes: `<polygon points="24,5 37,16 32,41 16,41 11,16" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M24 5v36M11 16l13 8 13-8" fill="none" stroke="currentColor" stroke-width="1.6"/>`,
+  fetch: `<polygon points="24,4 28.5,19.5 44,24 28.5,28.5 24,44 19.5,28.5 4,24 19.5,19.5" fill="currentColor" fill-opacity="0.24" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="24" cy="24" r="3.5" fill="currentColor"/>`,
+  dual: `<circle cx="18.5" cy="24" r="10.5" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-width="2"/><circle cx="29.5" cy="24" r="10.5" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-width="2"/><polygon points="24,18 27,24 24,30 21,24" fill="currentColor" fill-opacity="0.7"/>`,
+  fused: `<polygon points="24,5 39,24 24,43 9,24" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><polygon points="24,13 32,24 24,35 16,24" fill="currentColor" fill-opacity="0.4" stroke="currentColor" stroke-width="1.6"/>`,
+
+  // Creatures
+  dragon: `<path d="M24 7L7 19l7 3-7 13 17-6 17 6-7-13 7-3L24 7z" fill="currentColor" fill-opacity="0.26" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="24" cy="20" r="2.8" fill="currentColor"/>`,
+  goblin: `<path d="M12 37L35 9l-3 14 7 2L14 40l4-11-6 8z" fill="currentColor" fill-opacity="0.28" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>`,
+  angel: `<path d="M24 14c-7-7-18-3-18 6 0 7 8 11 18 19 10-8 18-12 18-19 0-9-11-13-18-6z" fill="currentColor" fill-opacity="0.24" stroke="currentColor" stroke-width="2"/><ellipse cx="24" cy="8" rx="8.5" ry="2.5" fill="none" stroke="currentColor" stroke-width="2"/>`,
+  vampire: `<path d="M14 9h20l-3 14a7 7 0 0 1-14 0L14 9zm10 21v9m-7 0h14" fill="currentColor" fill-opacity="0.24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 14l2 5 2-5m2 0l2 5 2-5" fill="none" stroke="currentColor" stroke-width="1.6"/>`,
+  archon: `<path d="M24 6l15 11-5 21H14L9 17 24 6z" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M17 18l7 5 7-5M24 23v14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>`,
+  zombie: `<circle cx="24" cy="20" r="11" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2"/><path d="M19 30v9h10v-9M19 19h3m4 0h3M22 39v-4m4 4v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>`,
+  specter: `<path d="M24 6c-8 0-13 7-13 17v17l6-4 7 4 7-4 6 4V23c0-10-5-17-13-17z" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="20" cy="21" r="2" fill="currentColor"/><circle cx="28" cy="21" r="2" fill="currentColor"/>`,
+  nightmare: `<path d="M9 14c4 10 9 12 15 12s11-2 15-12c-2 14-8 24-15 26-7-2-13-12-15-26z" fill="currentColor" fill-opacity="0.26" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="24" cy="22" r="3" fill="currentColor"/>`,
+  wizard: `<path d="M6 24s7-11 18-11 18 11 18 11-7 11-18 11S6 24 6 24z" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-width="2"/><circle cx="24" cy="24" r="5" fill="currentColor"/>`,
+  bird: `<path d="M5 22c7-9 14-9 19-2 5-7 12-7 19 2-7 2-13 6-19 14-6-8-12-12-19-14z" fill="currentColor" fill-opacity="0.26" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>`,
+  djinn: `<path d="M12 16c4-6 20-6 24 0-3 6-8 7-12 11 5 2 9 6 7 12-6 2-14 2-18-3 4-4 3-9-1-12z" fill="currentColor" fill-opacity="0.24" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>`,
+  elf: `<path d="M14 38c0-15 8-26 22-30-3 14-10 24-22 30z" fill="currentColor" fill-opacity="0.26" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M14 38L29 20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>`,
+  snake: `<path d="M32 10c-9 0-14 4-14 9s14 5 14 11-7 9-16 9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><circle cx="33" cy="10" r="3.2" fill="currentColor"/>`,
+  insect: `<ellipse cx="24" cy="26" rx="8" ry="12" fill="currentColor" fill-opacity="0.26" stroke="currentColor" stroke-width="2"/><path d="M16 20l-7-4m7 10H8m8 6l-7 4M32 20l7-4m-7 10h8m-8 6l7 4M20 14l-3-6m11 6l3-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>`,
+  beast: `<path d="M10 37c2-12 9-21 14-27 5 6 12 15 14 27-6-4-10-6-14-6s-8 2-14 6z" fill="currentColor" fill-opacity="0.28" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>`,
+  dinosaur: `<path d="M11 36V18l9-9h15l4 7-9 4 7 6-9 10H11z" fill="currentColor" fill-opacity="0.26" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="28" cy="15" r="2" fill="currentColor"/>`,
+  spider: `<circle cx="24" cy="28" r="7" fill="currentColor" fill-opacity="0.3" stroke="currentColor" stroke-width="2"/><circle cx="24" cy="18" r="4" fill="currentColor" fill-opacity="0.45" stroke="currentColor" stroke-width="2"/><path d="M17 24L8 16m9 12H7m10 4l-8 7M31 24l9-8m-9 12h10m-10 4l8 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>`,
+  spirit: `<path d="M24 6c8 9 11 16 11 23a11 11 0 1 1-22 0c0-7 3-14 11-23z" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2"/><circle cx="24" cy="27" r="4" fill="currentColor" fill-opacity="0.6"/>`,
+  soldier: `<path d="M24 6l14 6v12c0 9-6 15-14 19-8-4-14-10-14-19V12l14-6z" fill="currentColor" fill-opacity="0.24" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M24 12v22M16 20h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>`,
+  knight: `<path d="M15 39l3-17 6-14 11 7-4 9 4 15H15z" fill="currentColor" fill-opacity="0.24" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M18 22h13" stroke="currentColor" stroke-width="2"/>`,
+  cleric: `<path d="M24 7v6m-10 19h20l-2-12a8 8 0 0 0-16 0l-2 12z" fill="currentColor" fill-opacity="0.24" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="24" cy="37" r="3" fill="currentColor"/>`,
+  giant: `<path d="M10 18h28v10H10z" fill="currentColor" fill-opacity="0.28" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M24 10v32M18 42h12" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>`,
+  centaur: `<path d="M14 10l4 9 6-3 6 3 4-9M14 22l10 18 10-18H14z" fill="currentColor" fill-opacity="0.24" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>`,
+  dryad: `<circle cx="24" cy="18" r="10" fill="currentColor" fill-opacity="0.24" stroke="currentColor" stroke-width="2"/><path d="M24 28v13M18 35l6-5 6 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>`,
+  monk: `<path d="M10 38L38 10M38 38L10 10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="24" cy="24" r="6" fill="currentColor" fill-opacity="0.3" stroke="currentColor" stroke-width="2"/>`,
+  rogue: `<path d="M11 37L34 10l3 3-23 27-3-3zM28 24l9 9-3 3-9-9" fill="currentColor" fill-opacity="0.26" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>`,
+  scout: `<circle cx="24" cy="24" r="14" fill="currentColor" fill-opacity="0.16" stroke="currentColor" stroke-width="2"/><polygon points="24,11 28,24 24,37 20,24" fill="currentColor" fill-opacity="0.55"/>`,
+  construct: `<polygon points="24,6 39,15 39,33 24,42 9,33 9,15" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2"/><circle cx="24" cy="24" r="6" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="24" cy="24" r="2.2" fill="currentColor"/>`,
+
+  // Permanents & Curses
+  enchantment: `<circle cx="24" cy="24" r="14" fill="currentColor" fill-opacity="0.16" stroke="currentColor" stroke-width="1.8" stroke-dasharray="4 3"/><polygon points="24,9 36,24 24,39 12,24" fill="currentColor" fill-opacity="0.28" stroke="currentColor" stroke-width="2"/><circle cx="24" cy="24" r="3.5" fill="currentColor"/>`,
+  artifact: `<circle cx="24" cy="24" r="12" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-width="2"/><ellipse cx="24" cy="24" rx="17" ry="6" fill="none" stroke="currentColor" stroke-width="1.8" transform="rotate(-28 24 24)"/><circle cx="24" cy="24" r="3" fill="currentColor"/>`,
+  curse: `<polygon points="24,6 40,36 8,36" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M24 16v10m0 4v2" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>`,
+
+  // Spells
+  fire_spell: `<path d="M26 5L11 26h11l-4 17 19-22H25L26 5z" fill="currentColor" fill-opacity="0.34" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>`,
+  necro_spell: `<circle cx="24" cy="20" r="11" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2"/><path d="M18 30v9h12v-9M20 19h2m4 0h2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>`,
+  nature_spell: `<path d="M37 10C20 10 10 20 10 38c18 0 27-10 27-28zM10 38L28 20" fill="currentColor" fill-opacity="0.26" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>`,
+  arcane_spell: `<polygon points="24,5 29,17 42,19 32,28 35,41 24,34 13,41 16,28 6,19 19,17" fill="currentColor" fill-opacity="0.24" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>`,
+  holy_spell: `<path d="M24 5v38M8 21h32" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/><circle cx="24" cy="21" r="8.5" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="2"/>`,
+  blink_spell: `<polygon points="18,10 28,24 18,38 8,24" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-width="1.8"/><polygon points="30,10 40,24 30,38 20,24" fill="currentColor" fill-opacity="0.32" stroke="currentColor" stroke-width="2"/>`,
+  token_spell: `<path d="M14 9v30M14 11h16l-4 7 4 7H14" fill="currentColor" fill-opacity="0.26" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M26 17h10l-3 5 3 5H26" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>`
 };
+
+function resolveCardArtUrl(c, theme) {
+  if (typeof getScryfallCardArtUrl === "function") {
+    return getScryfallCardArtUrl(c, theme);
+  }
+  return "";
+}
 
 function renderCardArtHtml(c, mode = "hand") {
   const theme = getCardArtTheme(c);
   const svgInner = ART_SVG_PATHS[theme] || ART_SVG_PATHS.arcane_spell;
+  const imgUrl = resolveCardArtUrl(c, theme);
+  const imgHtml = imgUrl
+    ? `<img class="card-art-img" src="${escapeHtmlText(imgUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false" onerror="this.style.display='none'" />`
+    : "";
   return `
-    <div class="card-art-frame art-theme-${theme} art-mode-${mode}" aria-hidden="true">
+    <div class="card-art-frame art-theme-${theme} art-mode-${mode}${imgUrl ? " has-card-art-img" : ""}" aria-hidden="true">
       <svg class="card-art-svg" viewBox="0 0 48 48" focusable="false">${svgInner}</svg>
+      ${imgHtml}
       <div class="card-art-vignette"></div>
     </div>
   `;
+}
+
+function renderCardIconBadgeHtml(c) {
+  const theme = getCardArtTheme(c);
+  const svgInner = ART_SVG_PATHS[theme] || ART_SVG_PATHS.arcane_spell;
+  const imgUrl = resolveCardArtUrl(c, theme);
+  const imgHtml = imgUrl
+    ? `<img class="card-icon-badge-img" src="${escapeHtmlText(imgUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false" onerror="this.style.display='none'" />`
+    : "";
+  return `<span class="card-icon-badge art-theme-${theme}${imgUrl ? " has-card-art-img" : ""}" aria-hidden="true"><svg viewBox="0 0 48 48" focusable="false">${svgInner}</svg>${imgHtml}</span>`;
 }
 
 function renderKeywordTagsHtml(permKws, tempKws = []) {
@@ -1187,7 +1280,8 @@ function showCardHoverInspector(cardData, sourceEl, contextBadge = "") {
   const inspector = document.getElementById("card-hover-inspector");
   if (!inspector) return;
 
-  const isCreature = cardData.type === "Creature" || cardData.power !== undefined;
+  const isRelic = Boolean(cardData.isRelic || (!cardData.type && !Array.isArray(cardData.produces) && cardData.desc !== undefined && cardData.power === undefined));
+  const isCreature = !isRelic && (cardData.type === "Creature" || cardData.power !== undefined);
   const pow = isCreature
     ? (cardData.power + (cardData.tempPower || 0) + (cardData.permPowerBonus || 0))
     : 0;
@@ -1196,9 +1290,17 @@ function showCardHoverInspector(cardData, sourceEl, contextBadge = "") {
     : 0;
   const allKws = extractCardKeywords(cardData);
   const foilCls = cardData.foil ? ` foil-card-${cardData.foil}` : "";
-  const typeLine = cardData.type
-    ? `${cardData.type}${cardData.subtype ? ` — ${cardData.subtype}` : ""}`
-    : (Array.isArray(cardData.produces) ? "Land" : "Creature");
+  const rarityInfo = isRelic && typeof getRelicRarityInfo === "function"
+    ? getRelicRarityInfo(cardData)
+    : null;
+  const typeLine = isRelic
+    ? `Command Zone Relic${rarityInfo ? ` — ${rarityInfo.label}` : ""}`
+    : (cardData.type
+      ? `${cardData.type}${cardData.subtype ? ` — ${cardData.subtype}` : ""}`
+      : (Array.isArray(cardData.produces) ? "Land" : "Creature"));
+  const rulesText = isRelic
+    ? (cardData.desc || cardData.rules || "")
+    : (cardData.rules || (Array.isArray(cardData.produces) ? `Tap to add ${cardData.produces.map(c => `{${c}}`).join(" or ")}.` : ""));
 
   const kwGlossaryHtml = allKws.length > 0
     ? `<div class="inspector-glossary">
@@ -1212,17 +1314,18 @@ function showCardHoverInspector(cardData, sourceEl, contextBadge = "") {
       </div>`
     : "";
 
+  const rarityCls = rarityInfo ? ` relic-rarity-${rarityInfo.id}` : "";
   inspector.innerHTML = `
-    <div class="inspector-card card-color-${cardData.color || "C"}${foilCls}">
+    <div class="inspector-card card-color-${cardData.color || "C"}${foilCls}${rarityCls}">
       ${cardData.foil ? `<div class="foil-badge">✨ ${cardData.foil} Foil</div>` : ""}
       <div class="card-top-bar">
-        <span class="card-title">${cardData.name}${renderEvolutionMarkHtml(cardData)}</span>
+        <span class="card-title">${isRelic ? "✦ " : ""}${cardData.name}${renderEvolutionMarkHtml(cardData)}</span>
         ${cardData.manaCost ? renderManaCostHtml(cardData) : ""}
       </div>
-      ${renderCardArtHtml(cardData, "inspector")}
+      ${isRelic ? "" : renderCardArtHtml(cardData, "inspector")}
       <div class="card-type-line">${typeLine}</div>
       ${allKws.length > 0 ? `<div class="card-keywords">${renderKeywordTagsHtml(allKws)}</div>` : ""}
-      <div class="card-rules inspector-rules">${cardData.rules || (Array.isArray(cardData.produces) ? `Tap to add ${cardData.produces.map(c => `{${c}}`).join(" or ")}.` : "")}</div>
+      <div class="card-rules inspector-rules">${rulesText}</div>
       <div class="card-bottom-bar">
         <span class="inspector-context-pill">${contextBadge}</span>
         ${isCreature ? `<span class="pt-box">${pow}/${tough}</span>` : ""}
@@ -1237,12 +1340,28 @@ function showCardHoverInspector(cardData, sourceEl, contextBadge = "") {
     inspector.classList.toggle("dock-left", putLeft);
   }
   inspector.hidden = false;
+  if (typeof inspector.showPopover === "function") {
+    try {
+      if (typeof inspector.matches === "function" && inspector.matches(":popover-open")) {
+        inspector.hidePopover();
+      }
+      inspector.showPopover();
+    } catch (_) {}
+  }
 }
 
 function hideCardHoverInspector() {
   if (isHeadlessEnv()) return;
   const inspector = document.getElementById("card-hover-inspector");
-  if (inspector) inspector.hidden = true;
+  if (!inspector) return;
+  if (typeof inspector.hidePopover === "function") {
+    try {
+      if (typeof inspector.matches !== "function" || inspector.matches(":popover-open")) {
+        inspector.hidePopover();
+      }
+    } catch (_) {}
+  }
+  inspector.hidden = true;
 }
 
 function triggerTransientClass(el, cls, durationMs = 320) {
@@ -1667,6 +1786,22 @@ function renderBossPanel(enc, lifePct) {
     seedBadge.textContent = state.runSeed ? `SEEDED RUN • ${state.runSeed}` : "";
     seedBadge.title = state.runSeed ? `Share this seed to replay the same run: ${state.runSeed}` : "";
   }
+  const mutatorsBar = getEl("run-mutators-bar");
+  if (mutatorsBar) {
+    const loopNum = typeof getCurrentEndlessLoop === "function" ? getCurrentEndlessLoop() : 0;
+    const mutators = typeof getActiveEndlessMutators === "function" ? getActiveEndlessMutators(loopNum) : [];
+    const ascLevel = Number(state.ascensionLevel) || 0;
+    const ascDef = ascLevel > 0 && typeof getAscensionDefinition === "function" ? getAscensionDefinition(ascLevel) : null;
+    const pills = [];
+    if (ascDef) {
+      pills.push(`<span class="mutator-pill mutator-ascension" title="${ascDef.desc}">⭐ ${ascDef.name}</span>`);
+    }
+    mutators.forEach(m => {
+      pills.push(`<span class="mutator-pill" title="${m.desc}">${m.icon} ${m.name}</span>`);
+    });
+    mutatorsBar.hidden = pills.length === 0;
+    patchInnerHtmlIfChanged(mutatorsBar, pills.join(""));
+  }
 
   const enemyLifeBar = getEl("enemy-life-bar");
   if (enemyLifeBar && enemyLifeBar.style) {
@@ -1893,11 +2028,12 @@ function renderPlayerStatsAndMana() {
 }
 
 function renderCommandZone() {
-  setText("relic-count", `(${state.relics.length}/5)`);
+  const maxRelicSlots = typeof getRelicMaxSlots === "function" ? getRelicMaxSlots() : 5;
+  setText("relic-count", `(${state.relics.length}/${maxRelicSlots})`);
   const relicContainer = getEl("relic-slots");
   const relicSlotItems = [
     ...state.relics.map((r, idx) => ({ type: "relic", relic: r, idx, key: `relic_${r.id}` })),
-    ...Array.from({ length: Math.max(0, 5 - state.relics.length) }, (_, i) => ({
+    ...Array.from({ length: Math.max(0, maxRelicSlots - state.relics.length) }, (_, i) => ({
       type: "empty",
       key: `empty_relic_${state.relics.length + i}`
     }))
@@ -1920,14 +2056,15 @@ function renderCommandZone() {
       }
       const { relic: r, idx } = item;
       const sellVal = Math.floor((r.cost || 4) / 2);
-      if (!el.classList.contains("relic-card")) el.className = "relic-card";
+      const rarityInfo = typeof getRelicRarityInfo === "function" ? getRelicRarityInfo(r) : { id: "common", label: "Common" };
+      el.className = `relic-card relic-rarity-${rarityInfo.id}`;
       el.dataset.relicId = r.id;
       if (pendingRelicRewardHighlights.delete(r.id)) {
         emphasizeRewardElement(el);
       }
       patchInnerHtmlIfChanged(el, `
         <div class="relic-header-row">
-          <div class="relic-name">✦ ${r.name}</div>
+          <div class="relic-name">✦ ${r.name} <span class="relic-rarity-badge rarity-${rarityInfo.id}">${rarityInfo.label}</span></div>
           <div class="relic-actions">
             ${state.relics.length > 1 ? `
               <button type="button" class="relic-move" data-move-relic="${idx}" data-move-dir="-1" title="Move Relic Left" aria-label="Move ${r.name} Left" ${idx === 0 ? "disabled" : ""}>◀</button>
@@ -1993,6 +2130,39 @@ function renderCommandZone() {
 }
 
 function renderBattlefieldLanes(enc, combat, prevHandRects, libRect) {
+  const intentBanner = getEl("enemy-intent-banner");
+  if (intentBanner && typeof getEncounterTurnIntent === "function") {
+    const intent = getEncounterTurnIntent(enc, state.turn);
+    const pillsHtml = (intent.badges || []).map(b => `<span class="intent-pill intent-${b.kind}">${b.text}</span>`).join("");
+    intentBanner.hidden = !intent.headline && !pillsHtml;
+    patchInnerHtmlIfChanged(intentBanner, `
+      <span class="intent-headline">${intent.headline}</span>
+      ${pillsHtml ? `<div class="intent-pills">${pillsHtml}</div>` : ""}
+    `);
+  }
+
+  const permanentsStrip = getEl("player-permanents");
+  if (permanentsStrip) {
+    const perms = Array.isArray(state.playerPermanents) ? state.playerPermanents : [];
+    permanentsStrip.hidden = perms.length === 0;
+    if (perms.length > 0) {
+      patchInnerHtmlIfChanged(
+        permanentsStrip,
+        `<span class="permanents-label">PERMANENTS (${perms.length}):</span>` +
+        perms.map((p, idx) => `
+          <span class="permanent-pill card-color-${p.color}" data-permanent-uid="${p.uid || idx}" tabindex="0" aria-label="${p.name} (${p.type}) — ${p.rules}">
+            <span class="permanent-type-icon">${p.type === "Artifact" ? "⚙️" : "✨"}</span>
+            <strong>${p.name}</strong>
+          </span>
+        `).join("")
+      );
+    }
+  }
+
+  const permCombatBonus = typeof getPermanentStaticCombatBonus === "function"
+    ? getPermanentStaticCombatBonus()
+    : { powerBonus: 0, toughnessBonus: 0 };
+
   const enemyRow = getEl("enemy-creatures");
   reconcileKeyedList(
     enemyRow,
@@ -2025,8 +2195,9 @@ function renderBattlefieldLanes(enc, combat, prevHandRects, libRect) {
       patchInnerHtmlIfChanged(el, `
         ${ec.foil ? `<div class="foil-badge">✨ ${ec.foil}</div>` : ""}
         <div class="card-top-bar">
-          <span class="card-title">${ec.name}</span>
+          <span class="card-title-group"><span class="card-title">${ec.name}</span></span>
         </div>
+        ${renderCardArtHtml(ec, "board")}
         <div class="card-keywords">
           ${renderKeywordTagsHtml(ec.keywords, ec.frozen ? ["Frozen"] : [])}
         </div>
@@ -2056,8 +2227,8 @@ function renderBattlefieldLanes(enc, combat, prevHandRects, libRect) {
       return btn;
     },
     (el, pc, _idx, isNew) => {
-      const pow = pc.power + (pc.tempPower || 0);
-      const tough = pc.toughness + (pc.tempToughness || 0);
+      const pow = pc.power + (pc.tempPower || 0) + permCombatBonus.powerBonus;
+      const tough = pc.toughness + (pc.tempToughness || 0) + permCombatBonus.toughnessBonus;
       const deadCount = combat.deadAttackerCountsByUid[pc.uid] || 0;
       const attAssign = combat.attackerAssignments[pc.uid];
       const damageToBoss = combat.attackerDamageByUid[pc.uid] || 0;
@@ -2102,9 +2273,10 @@ function renderBattlefieldLanes(enc, combat, prevHandRects, libRect) {
       patchInnerHtmlIfChanged(el, `
         ${pc.foil ? `<div class="foil-badge">✨ ${pc.foil}</div>` : ""}
         <div class="card-top-bar">
-          <span class="card-title">${pc.name}${renderEvolutionMarkHtml(pc)}</span>
+          <span class="card-title-group"><span class="card-title">${pc.name}${renderEvolutionMarkHtml(pc)}</span></span>
           ${count > 1 ? `<span class="stack-count-badge">×${count}</span>` : ""}
         </div>
+        ${renderCardArtHtml(pc, "board")}
         <div class="card-keywords">
           ${renderKeywordTagsHtml(permKws, tempKws)}
         </div>
@@ -2178,9 +2350,10 @@ function renderBattlefieldLanes(enc, combat, prevHandRects, libRect) {
         : "";
       patchInnerHtmlIfChanged(el, `
         <div class="card-top-bar">
-          <span class="card-title">${l.name}</span>
+          <span class="card-title-group"><span class="card-title">${l.name}</span></span>
           <span class="mana-cost-badge">${l.tapped ? `<span class="kw-tag">Tapped</span>` : pipBadges}</span>
         </div>
+        ${renderCardArtHtml(l, "land")}
         ${enhBadgeHtml ? `<div class="land-meta-row">${enhBadgeHtml}</div>` : ""}
         <div class="card-rules">${baseHint}</div>
         ${overchargeHtml ? `<div class="land-actions-row">${overchargeHtml}</div>` : ""}
@@ -2280,6 +2453,7 @@ function renderHandZone(prevHandRects, libRect, boardUidSet) {
             <span class="card-title">${c.name}${renderEvolutionMarkHtml(c)}</span>
             ${renderManaCostHtml(c)}
           </div>
+          ${renderCardArtHtml(c, "hand")}
           <div class="card-type-line">${c.type}${c.subtype ? ` — ${c.subtype}` : ""}</div>
           <div class="card-keywords">
             ${renderKeywordTagsHtml(c.keywords || [])}
@@ -2425,30 +2599,75 @@ function renderShop() {
   if (isHeadlessEnv()) return;
 
   setResourceText("shop-gold", `$${state.gold}`);
+  const masterDeck = Array.isArray(state.masterDeck) ? state.masterDeck : [];
+  const deckLandCount = masterDeck.filter(c => c && c.type === "Land").length;
+  const deckSpellCount = masterDeck.length - deckLandCount;
+  const shopDeckSummary = getEl("shop-deck-summary");
+  if (shopDeckSummary) {
+    shopDeckSummary.innerHTML = `Deck: <strong>${masterDeck.length}</strong> <span>(${deckLandCount}L / ${deckSpellCount}S)</span>`;
+    shopDeckSummary.title = `Master Deck: ${masterDeck.length} cards — ${deckLandCount} Lands, ${deckSpellCount} Spells & Creatures`;
+  }
+
   const rewardDuration = getCombatAnimationDelay(460);
   const rewardClass = key => pendingShopRewardHighlights.has(key) && rewardDuration > 0 ? " reward-enter" : "";
   const rewardStyle = key => pendingShopRewardHighlights.has(key) && rewardDuration > 0
     ? ` style="--reward-enter-duration:${rewardDuration}ms"`
     : "";
+  const rerollCost = typeof getShopRerollCost === "function" ? getShopRerollCost() : 2;
   const rerollBtn = getEl("btn-reroll-shop");
   if (rerollBtn) {
-    rerollBtn.disabled = state.gold < 2;
+    rerollBtn.disabled = state.gold < rerollCost;
+    rerollBtn.textContent = `Reroll Stock ($${rerollCost})`;
+  }
+
+  const maxRelicSlots = typeof getRelicMaxSlots === "function" ? getRelicMaxSlots() : 5;
+  const relicsFull = state.relics.length >= maxRelicSlots;
+
+  const ownedRelicsBar = getEl("shop-owned-relics-bar");
+  if (ownedRelicsBar) {
+    ownedRelicsBar.hidden = false;
+    ownedRelicsBar.classList.toggle("is-full", relicsFull);
+    const ownedPillsHtml = state.relics.length === 0
+      ? `<span class="zone-hint">No Command Zone Relics equipped yet.</span>`
+      : state.relics.map(r => {
+          const sellVal = Math.floor((r.cost || 4) / 2);
+          const rarityInfo = typeof getRelicRarityInfo === "function" ? getRelicRarityInfo(r) : { id: "common", label: "Common" };
+          return `
+            <div class="shop-owned-relic-pill relic-rarity-${rarityInfo.id}" data-shop-owned-relic-id="${r.id}" tabindex="0">
+              <span class="shop-owned-relic-name">✦ ${r.name}</span>
+              <button type="button" class="shop-owned-relic-sell" data-shop-sell-relic="${r.id}" title="Sell ${r.name} for $${sellVal} to free a Command Zone slot">
+                Sell $${sellVal}
+              </button>
+            </div>
+          `;
+        }).join("");
+    ownedRelicsBar.innerHTML = `
+      <div class="shop-owned-relics-header">
+        <span class="zone-label">EQUIPPED RELICS <strong>(${state.relics.length}/${maxRelicSlots})</strong></span>
+        <span class="zone-hint">${relicsFull ? "Command Zone full — sell a relic here to buy another." : "Hover any relic to inspect or sell for Gold."}</span>
+      </div>
+      <div class="shop-owned-relics-list">${ownedPillsHtml}</div>
+    `;
   }
 
   const relicBox = getEl("shop-relics");
   if (relicBox) {
-    relicBox.innerHTML = state.shopStock.relics.map((r, i) => `
-      <div class="shop-item-card${rewardClass(`relic_${r.id}`)}"${rewardStyle(`relic_${r.id}`)}>
+    relicBox.innerHTML = state.shopStock.relics.map((r, i) => {
+      const rarityInfo = typeof getRelicRarityInfo === "function" ? getRelicRarityInfo(r) : { id: "common", label: "Common" };
+      const btnText = r.bought ? "OWNED" : (relicsFull ? "SLOTS FULL" : `$${r.cost}`);
+      return `
+      <div class="shop-item-card relic-rarity-${rarityInfo.id}${rewardClass(`relic_${r.id}`)}"${rewardStyle(`relic_${r.id}`)} data-shop-relic-idx="${i}" tabindex="0">
         <div class="shop-item-top">
-          <span class="shop-item-name">✨ ${r.name}</span>
+          <span class="shop-item-name">✨ ${r.name} <span class="relic-rarity-badge rarity-${rarityInfo.id}">${rarityInfo.label}</span></span>
           <button type="button" class="btn-buy" data-buy-relic="${i}"
-            ${r.bought || state.gold < r.cost || state.relics.length >= 5 ? "disabled" : ""}>
-            ${r.bought ? "OWNED" : `$${r.cost}`}
+            ${r.bought || state.gold < r.cost || relicsFull ? "disabled" : ""}>
+            ${btnText}
           </button>
         </div>
         <div class="relic-desc">${r.desc}</div>
       </div>
-    `).join("");
+    `;
+    }).join("");
   }
 
   const cardsBox = getEl("shop-cards");
@@ -2456,9 +2675,9 @@ function renderShop() {
     cardsBox.innerHTML = state.shopStock.cards.map((item, i) => {
       const c = item.card;
       return `
-        <div class="shop-item-card${rewardClass(`card_${c.id}`)}"${rewardStyle(`card_${c.id}`)}>
+        <div class="shop-item-card${rewardClass(`card_${c.id}`)}"${rewardStyle(`card_${c.id}`)} data-shop-card-idx="${i}" tabindex="0">
           <div class="shop-item-top">
-            <span class="shop-item-name">${c.name} ${renderManaCostHtml(c)}</span>
+            <span class="shop-item-name card-title-group">${renderCardIconBadgeHtml(c)}<span>${c.name}</span> ${renderManaCostHtml(c)}</span>
             <button type="button" class="btn-buy" data-buy-card="${i}"
               ${item.bought || state.gold < item.cost ? "disabled" : ""}>
               ${item.bought ? "DRAFTED" : `$${item.cost}`}
@@ -2511,7 +2730,7 @@ function renderShop() {
                 : (u.id === "card_purge" ? "🔥" : "🔨")))));
 
       return `
-        <div class="shop-item-card${rewardClass(`upgrade_${u.id}`)}"${rewardStyle(`upgrade_${u.id}`)}>
+        <div class="shop-item-card${rewardClass(`upgrade_${u.id}`)}"${rewardStyle(`upgrade_${u.id}`)} data-shop-upgrade-idx="${i}" tabindex="0">
           <div class="shop-item-top">
             <span class="shop-item-name">${upgIcon} ${u.name}</span>
             <button type="button" class="btn-buy" data-buy-upg="${i}"
@@ -2550,7 +2769,7 @@ function openCardEvolutionPicker(upgradeIdx) {
       const options = getAvailableCardEvolutionOptions(card);
       openTargetPickerModal(
         `Evolve ${card.name}`,
-        "Choose +3/+3 or +1/+1 with Trample. Press Escape to cancel.",
+        "Choose a permanent evolution upgrade for this Creature. Press Escape to cancel.",
         options,
         (option, idx) => `
           <button type="button" class="evolution-option-card" data-target-idx="${idx}">
@@ -3187,33 +3406,157 @@ function openCardCollectionModal() {
   safeShowModal(dialog);
 }
 
-function openDeckInspector(title, desc, cards) {
-  if (isHeadlessEnv()) return;
-  setText("deck-dialog-title", title);
-  setText("deck-dialog-desc", desc);
-  const grid = getEl("deck-dialog-grid");
-  if (grid) {
-    if (!Array.isArray(cards) || cards.length === 0) {
-      grid.innerHTML = `<div class="zone-hint">Zone is currently empty.</div>`;
+let deckInspectorState = {
+  cards: [],
+  grouped: [],
+  filter: "all"
+};
+
+function getDeckInspectorCategory(card) {
+  if (!card) return "spell";
+  if (card.type === "Land") return "land";
+  if (card.type === "Creature") return "creature";
+  if (card.type === "Artifact" || card.type === "Enchantment") return "permanent";
+  return "spell";
+}
+
+function groupDeckInspectorCards(cards) {
+  const map = new Map();
+  (Array.isArray(cards) ? cards : []).forEach(c => {
+    if (!c) return;
+    const key = [
+      c.id || c.name || "",
+      c.foil || "",
+      c.evolutionId || "",
+      c.landEnhancement || "",
+      c.fused ? "fused" : "",
+      c.permPowerBonus || 0,
+      c.permToughnessBonus || 0
+    ].join("|");
+    const existing = map.get(key);
+    if (existing) {
+      existing.count += 1;
     } else {
-      grid.innerHTML = cards.map(c => {
+      map.set(key, { card: c, count: 1, category: getDeckInspectorCategory(c) });
+    }
+  });
+  return Array.from(map.values()).sort((a, b) => {
+    const order = { creature: 0, spell: 1, permanent: 2, land: 3 };
+    const catDiff = (order[a.category] ?? 9) - (order[b.category] ?? 9);
+    if (catDiff !== 0) return catDiff;
+    const mvDiff = getCardCollectionManaValue(a.card) - getCardCollectionManaValue(b.card);
+    if (mvDiff !== 0) return mvDiff;
+    return String(a.card.name || "").localeCompare(String(b.card.name || ""));
+  });
+}
+
+function renderDeckInspectorView() {
+  const cards = deckInspectorState.cards;
+  const grouped = deckInspectorState.grouped;
+  const activeFilter = deckInspectorState.filter;
+  const summaryEl = getEl("deck-dialog-summary");
+  const tabsEl = getEl("deck-dialog-tabs");
+  const grid = getEl("deck-dialog-grid");
+
+  const counts = { all: cards.length, land: 0, creature: 0, spell: 0, permanent: 0 };
+  const curve = [0, 0, 0, 0, 0, 0]; // 0, 1, 2, 3, 4, 5+
+  cards.forEach(c => {
+    const cat = getDeckInspectorCategory(c);
+    counts[cat] = (counts[cat] || 0) + 1;
+    if (cat !== "land") {
+      const mv = Math.min(5, Math.max(0, getCardCollectionManaValue(c)));
+      curve[mv] += 1;
+    }
+  });
+
+  if (summaryEl) {
+    summaryEl.hidden = cards.length === 0;
+    if (cards.length > 0) {
+      const maxCurve = Math.max(1, ...curve);
+      const curveLabels = ["0", "1", "2", "3", "4", "5+"];
+      const curveHtml = curve.map((n, i) => {
+        const pct = n > 0 ? Math.max(14, Math.round((n / maxCurve) * 100)) : 0;
+        return `
+          <div class="mana-curve-col" title="Mana Value ${curveLabels[i]}: ${n} card${n === 1 ? "" : "s"}">
+            <span class="mana-curve-count">${n > 0 ? n : ""}</span>
+            <div class="mana-curve-bar-track">
+              <div class="mana-curve-bar-fill" style="height:${pct}%"></div>
+            </div>
+            <span class="mana-curve-label">${curveLabels[i]}</span>
+          </div>
+        `;
+      }).join("");
+      summaryEl.innerHTML = `
+        <div class="deck-stats-pills">
+          <span class="deck-stat-pill">Total <strong>${counts.all}</strong> <small>(${grouped.length} unique)</small></span>
+          <span class="deck-stat-pill">Lands <strong>${counts.land}</strong></span>
+          <span class="deck-stat-pill">Creatures <strong>${counts.creature}</strong></span>
+          <span class="deck-stat-pill">Spells <strong>${counts.spell}</strong></span>
+          ${counts.permanent > 0 ? `<span class="deck-stat-pill">Permanents <strong>${counts.permanent}</strong></span>` : ""}
+        </div>
+        <div class="deck-mana-curve" aria-label="Non-land mana curve">
+          <span class="deck-mana-curve-title">MANA CURVE</span>
+          <div class="mana-curve-bars">${curveHtml}</div>
+        </div>
+      `;
+    }
+  }
+
+  if (tabsEl) {
+    tabsEl.hidden = cards.length === 0;
+    if (cards.length > 0) {
+      const tabDefs = [
+        { id: "all", label: `All (${counts.all})` },
+        { id: "creature", label: `Creatures (${counts.creature})` },
+        { id: "spell", label: `Spells (${counts.spell})` },
+        ...(counts.permanent > 0 ? [{ id: "permanent", label: `Permanents (${counts.permanent})` }] : []),
+        { id: "land", label: `Lands (${counts.land})` }
+      ];
+      tabsEl.innerHTML = tabDefs.map(t => `
+        <button type="button" class="deck-filter-tab${activeFilter === t.id ? " active" : ""}" role="tab"
+          aria-selected="${activeFilter === t.id ? "true" : "false"}" data-deck-filter="${t.id}">
+          ${t.label}
+        </button>
+      `).join("");
+    }
+  }
+
+  if (grid) {
+    const visible = activeFilter === "all"
+      ? grouped
+      : grouped.filter(item => item.category === activeFilter);
+    if (cards.length === 0) {
+      grid.innerHTML = `<div class="zone-hint">Zone is currently empty.</div>`;
+    } else if (visible.length === 0) {
+      grid.innerHTML = `<div class="zone-hint">No cards match this filter.</div>`;
+    } else {
+      grid.innerHTML = visible.map(item => {
+        const c = item.card;
+        const groupedIdx = grouped.indexOf(item);
         const isCreature = c.type === "Creature";
         const dispPow = isCreature ? c.power + (c.permPowerBonus || 0) : 0;
         const dispTough = isCreature ? c.toughness + (c.permToughnessBonus || 0) : 0;
         const foilCls = c.foil ? ` foil-card-${c.foil}` : "";
+        const enhDef = c.landEnhancement && typeof getLandEnhancementDefinition === "function"
+          ? getLandEnhancementDefinition(c.landEnhancement)
+          : null;
         return `
-          <div class="hand-card card-color-${c.color}${foilCls}" style="cursor:default">
+          <div class="hand-card deck-inspector-card card-color-${c.color || "C"}${foilCls}" data-deck-inspector-idx="${groupedIdx}" tabindex="0">
             ${c.foil ? `<div class="foil-badge">✨ ${c.foil}</div>` : ""}
+            ${enhDef ? `<div class="foil-badge land-enh-pill">${enhDef.icon} ${enhDef.name}</div>` : ""}
+            ${item.count > 1 ? `<span class="stack-count-badge deck-copy-badge" aria-label="${item.count} copies">×${item.count}</span>` : ""}
             <div>
               <div class="card-top-bar">
-                <span class="card-title">${c.name}</span>
+                <span class="card-title">${c.name}${renderEvolutionMarkHtml(c)}</span>
                 ${renderManaCostHtml(c)}
               </div>
-              <div class="card-type-line">${c.type}</div>
+              ${renderCardArtHtml(c, "hand")}
+              <div class="card-type-line">${c.type}${c.subtype ? ` — ${c.subtype}` : ""}</div>
+              ${Array.isArray(c.keywords) && c.keywords.length > 0 ? `<div class="card-keywords">${renderKeywordTagsHtml(c.keywords)}</div>` : ""}
             </div>
             <div class="card-rules">${c.rules}</div>
             <div class="card-bottom-bar">
-              <span></span>
+              <span class="card-type-line">${item.count > 1 ? `${item.count} copies` : (c.type || "")}</span>
               ${isCreature ? `<span class="pt-box">${dispPow}/${dispTough}</span>` : ""}
             </div>
           </div>
@@ -3221,6 +3564,19 @@ function openDeckInspector(title, desc, cards) {
       }).join("");
     }
   }
+}
+
+function openDeckInspector(title, desc, cards) {
+  if (isHeadlessEnv()) return;
+  setText("deck-dialog-title", title);
+  setText("deck-dialog-desc", desc);
+  const safeCards = Array.isArray(cards) ? cards.slice() : [];
+  deckInspectorState = {
+    cards: safeCards,
+    grouped: groupDeckInspectorCards(safeCards),
+    filter: "all"
+  };
+  renderDeckInspectorView();
   safeShowModal("deck-dialog");
 }
 
@@ -3266,6 +3622,18 @@ function openNewRunModal(forceChoice = false, customTitle = null, customDesc = n
     updateRunCampaignDescription();
   }
 
+  const ascensionSelect = getEl("run-ascension-select");
+  if (ascensionSelect && Array.isArray(ASCENSION_LEVELS)) {
+    const maxUnlockedAsc = typeof getMaxUnlockedAscension === "function" ? getMaxUnlockedAscension() : 0;
+    ascensionSelect.innerHTML = ASCENSION_LEVELS.map(asc => {
+      const unlocked = asc.level <= maxUnlockedAsc;
+      return `<option value="${asc.level}"${unlocked ? "" : " disabled"}>${asc.name}${unlocked ? "" : ` (Clear ${asc.requiredClears}× to unlock)`}</option>`;
+    }).join("");
+    const safeAsc = Math.min(maxUnlockedAsc, Number(state.ascensionLevel) || 0);
+    ascensionSelect.value = String(safeAsc);
+    updateRunAscensionDescription();
+  }
+
   const seedInput = getEl("run-seed-input");
   if (seedInput) seedInput.value = state.runSeed || "";
   if (typeof getStarterDeckProgressMessage === "function") {
@@ -3278,13 +3646,20 @@ function openNewRunModal(forceChoice = false, customTitle = null, customDesc = n
       const idx = STARTER_DECKS.indexOf(d);
       const relicDef = RELIC_DB.find(r => r.id === d.startingRelic);
       const available = typeof isStarterDeckAvailable !== "function" || isStarterDeckAvailable(d.id);
+      const mastery = typeof getDeckMasteryRank === "function" ? getDeckMasteryRank(d.id) : 0;
+      const masteryHtml = mastery > 0
+        ? `<span class="starter-mastery-badge" title="Campaign clears with this guild">★ Mastery ${mastery}</span>`
+        : "";
       const requirement = STARTER_DECK_UNLOCK_REQUIREMENTS[d.id];
       const lockedLabel = requirement
         ? `🔒 Locked — ${requirement.description} to unlock`
         : "🔒 Locked";
       return `
         <button type="button" class="starter-deck-box${available ? "" : " starter-deck-locked"}" data-starter-idx="${idx >= 0 ? idx : 0}" data-starter-id="${d.id}"${available ? "" : ' disabled aria-disabled="true"'}>
-          <span class="plane-badge">${d.badge}</span>
+          <div class="starter-deck-badges">
+            <span class="plane-badge">${d.badge}</span>
+            ${masteryHtml}
+          </div>
           <h3>${d.name}</h3>
           <p class="relic-desc">${d.desc}</p>
           <div class="zone-hint">Starting Relic: <strong>${relicDef ? relicDef.name : d.startingRelic}</strong></div>
@@ -3294,6 +3669,14 @@ function openNewRunModal(forceChoice = false, customTitle = null, customDesc = n
     }).join("");
   }
   safeShowModal(dialog);
+}
+
+function updateRunAscensionDescription() {
+  const ascSelect = getEl("run-ascension-select");
+  const asc = typeof getAscensionDefinition === "function"
+    ? getAscensionDefinition(ascSelect ? Number(ascSelect.value) : 0)
+    : null;
+  if (asc) setText("run-ascension-desc", asc.desc);
 }
 
 function updateRunChallengeDescription() {
@@ -3351,14 +3734,81 @@ function openVictoryModal(enc, earned, healed) {
   );
   const statsEl = getEl("victory-stats");
   if (statsEl) {
+    const maxSlots = typeof getRelicMaxSlots === "function" ? getRelicMaxSlots() : 5;
     statsEl.innerHTML = `
       <div class="stat-chip"><span class="stat-label">ARCHETYPE</span><strong>${state.deckArchetype.badge}</strong></div>
-      <div class="stat-chip"><span class="stat-label">RELICS HELD</span><strong>${state.relics.length} / 5</strong></div>
+      <div class="stat-chip"><span class="stat-label">RELICS HELD</span><strong>${state.relics.length} / ${maxSlots}</strong></div>
       <div class="stat-chip"><span class="stat-label">DECK SIZE</span><strong>${state.masterDeck.length} Cards</strong></div>
       <div class="stat-chip"><span class="stat-label">LIFE REMAINING</span><strong>${state.playerLife} / ${MAX_LIFE}</strong></div>
     `;
   }
+  const endlessBtn = getEl("btn-endless-continue");
+  if (endlessBtn) {
+    const nextLoop = (typeof getCurrentEndlessLoop === "function" ? getCurrentEndlessLoop() : 0) + 1;
+    const nextMutators = typeof getActiveEndlessMutators === "function" ? getActiveEndlessMutators(nextLoop) : [];
+    const latestMut = nextMutators[nextMutators.length - 1];
+    endlessBtn.textContent = latestMut
+      ? `♾️ Enter Endless Loop ${nextLoop + 1} (2.5× HP • ${latestMut.icon} ${latestMut.name})`
+      : "♾️ Enter Endless Loop (2.5× Boss HP)";
+  }
   safeShowModal(dialog);
+}
+
+function openBossRelicModal(enc) {
+  if (isHeadlessEnv()) return;
+  const dialog = getEl("boss-relic-dialog");
+  if (!dialog) {
+    if (state.pendingDraft && !state.pendingDraft.resolved) openDraftModal(enc);
+    else safeShowModal("shop-dialog");
+    return;
+  }
+  safeCloseModal("shop-dialog");
+  safeCloseModal("draft-dialog");
+  safeCloseModal("victory-dialog");
+  const currentEnc = enc || (typeof getCurrentEncounter === "function" ? getCurrentEncounter() : null);
+  if (currentEnc) {
+    setText("boss-relic-plane-badge", `OVERLORD DEFEATED • ${currentEnc.name.toUpperCase()}`);
+  }
+  renderBossRelicModal();
+  safeShowModal(dialog);
+}
+
+function renderBossRelicModal() {
+  if (isHeadlessEnv()) return;
+  const grid = getEl("boss-relic-grid");
+  if (!grid) return;
+  setResourceText("boss-relic-gold", `$${state.gold}`);
+  const maxSlots = typeof getRelicMaxSlots === "function" ? getRelicMaxSlots() : 5;
+  setText("boss-relic-count", `${state.relics.length} / ${maxSlots}`);
+  const choices = state.pendingBossRelic && Array.isArray(state.pendingBossRelic.choices)
+    ? state.pendingBossRelic.choices
+    : [];
+  grid.innerHTML = choices.map((relicId, idx) => {
+    const def = RELIC_DB.find(r => r.id === relicId);
+    if (!def) return "";
+    return `
+      <div class="draft-card boss-relic-choice-card relic-rarity-boss" data-boss-relic-idx="${idx}">
+        <div class="draft-card-content">
+          <div class="draft-card-header">
+            <span class="draft-card-title">👑 ${def.name}</span>
+            <span class="relic-rarity-badge rarity-boss">Boss Relic</span>
+          </div>
+          <div class="draft-card-rules">${def.desc}</div>
+        </div>
+        <div class="draft-card-bottom">
+          <button type="button" class="btn-combat btn-boss-relic-select" data-boss-relic-choice="${idx}">
+            👑 Claim Boss Relic
+          </button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function closeBossRelicModal() {
+  if (isHeadlessEnv()) return;
+  const dialog = getEl("boss-relic-dialog");
+  if (dialog) safeCloseModal(dialog);
 }
 
 function openDraftModal(enc) {
@@ -3413,6 +3863,7 @@ function renderDraftModal() {
             <span class="draft-card-title">${card.name}</span>
             ${manaHtml}
           </div>
+          ${renderCardArtHtml(card, "draft")}
           <div class="draft-card-type">${card.type}${card.subtype ? ` — ${card.subtype}` : ""}${card.generated ? " • Generated" : ""}</div>
           <div class="draft-card-rules">${card.rules || ""}</div>
         </div>
@@ -3456,9 +3907,12 @@ function presentVictoryOrShopModal(enc, earned, healed, badgeText, summaryText) 
     ? getActiveCampaignEncounters()
     : ENCOUNTERS;
   const isCampaignClear = state.encounterIdx % campaignEncounters.length === campaignEncounters.length - 1;
+  const hasPendingBossRelic = Boolean(state.pendingBossRelic && !state.pendingBossRelic.resolved);
   const resultDialogId = isCampaignClear
     ? "victory-dialog"
-    : (state.pendingDraft && !state.pendingDraft.resolved ? "draft-dialog" : "shop-dialog");
+    : (hasPendingBossRelic
+      ? "boss-relic-dialog"
+      : (state.pendingDraft && !state.pendingDraft.resolved ? "draft-dialog" : "shop-dialog"));
   const resultDialog = getEl(resultDialogId);
   if (resultDialog?.classList) {
     const transitionDuration = getCombatAnimationDelay(520);
@@ -3480,6 +3934,8 @@ function presentVictoryOrShopModal(enc, earned, healed, badgeText, summaryText) 
 
   if (isCampaignClear) {
     openVictoryModal(enc, earned, healed);
+  } else if (hasPendingBossRelic) {
+    openBossRelicModal(enc);
   } else if (state.pendingDraft && !state.pendingDraft.resolved) {
     openDraftModal(enc);
   } else {
@@ -3489,6 +3945,10 @@ function presentVictoryOrShopModal(enc, earned, healed, badgeText, summaryText) 
 
 function openRestoredShopModal(enc) {
   if (isHeadlessEnv()) return;
+  if (state.pendingBossRelic && !state.pendingBossRelic.resolved) {
+    openBossRelicModal(enc);
+    return;
+  }
   if (state.pendingDraft && !state.pendingDraft.resolved) {
     openDraftModal(enc);
     return;
@@ -4510,11 +4970,138 @@ function openDesktopSettingsModal() {
   safeShowModal(dlg);
 }
 
+const HOVER_INSPECTOR_SELECTOR = [
+  "[data-shop-card-idx]",
+  "[data-shop-relic-idx]",
+  "[data-shop-owned-relic-id]",
+  "[data-shop-upgrade-idx]",
+  "[data-permanent-uid]",
+  "[data-deck-inspector-idx]",
+  "[data-hand-uid]",
+  "[data-creature-uid]",
+  "[data-enemy-uid]",
+  "[data-land-uid]",
+  "[data-relic-id]"
+].join(", ");
+
+let hoverInspectorInitialized = false;
+
+function resolveHoverInspectorPayload(el) {
+  if (!el || !el.dataset) return null;
+  if (el.dataset.shopCardIdx !== undefined) {
+    const item = state.shopStock && Array.isArray(state.shopStock.cards)
+      ? state.shopStock.cards[Number(el.dataset.shopCardIdx)]
+      : null;
+    return item && item.card ? { data: item.card, badge: `SANCTUM SHOP • $${item.cost}` } : null;
+  }
+  if (el.dataset.shopRelicIdx !== undefined) {
+    const relic = state.shopStock && Array.isArray(state.shopStock.relics)
+      ? state.shopStock.relics[Number(el.dataset.shopRelicIdx)]
+      : null;
+    return relic ? { data: { ...relic, isRelic: true }, badge: `SANCTUM RELIC • $${relic.cost}` } : null;
+  }
+  if (el.dataset.shopOwnedRelicId !== undefined) {
+    const relic = Array.isArray(state.relics)
+      ? state.relics.find(r => r.id === el.dataset.shopOwnedRelicId)
+      : null;
+    return relic ? { data: { ...relic, isRelic: true }, badge: "EQUIPPED RELIC" } : null;
+  }
+  if (el.dataset.shopUpgradeIdx !== undefined) {
+    const upg = state.shopStock && Array.isArray(state.shopStock.upgrades)
+      ? state.shopStock.upgrades[Number(el.dataset.shopUpgradeIdx)]
+      : null;
+    if (!upg) return null;
+    return {
+      data: {
+        name: upg.name,
+        type: upg.isConsumable ? "Arcane Scroll" : "Sanctum Upgrade",
+        color: "C",
+        rules: upg.desc
+      },
+      badge: `${upg.isConsumable ? "CONSUMABLE" : "UPGRADE"} • $${upg.cost}`
+    };
+  }
+  if (el.dataset.permanentUid !== undefined) {
+    const perms = Array.isArray(state.playerPermanents) ? state.playerPermanents : [];
+    const perm = perms.find((p, idx) => String(p.uid || idx) === String(el.dataset.permanentUid));
+    return perm ? { data: perm, badge: "ACTIVE PERMANENT" } : null;
+  }
+  if (el.dataset.deckInspectorIdx !== undefined) {
+    const item = deckInspectorState.grouped[Number(el.dataset.deckInspectorIdx)];
+    if (!item || !item.card) return null;
+    return {
+      data: item.card,
+      badge: item.count > 1 ? `DECK INSPECTOR • ×${item.count}` : "DECK INSPECTOR"
+    };
+  }
+  if (el.dataset.handUid !== undefined) {
+    if (activeHandDragController && activeHandDragController.getDraggedCardUid()) return null;
+    const card = Array.isArray(state.hand) ? state.hand.find(c => c.uid === el.dataset.handUid) : null;
+    return card ? { data: card, badge: "IN HAND" } : null;
+  }
+  if (el.dataset.creatureUid !== undefined) {
+    const cr = Array.isArray(state.playerCreatures) ? state.playerCreatures.find(c => c.uid === el.dataset.creatureUid) : null;
+    return cr ? { data: cr, badge: cr.attacking ? "ATTACKING" : "YOUR BATTLEFIELD" } : null;
+  }
+  if (el.dataset.enemyUid !== undefined) {
+    const ec = Array.isArray(state.enemyCreatures) ? state.enemyCreatures.find(c => c.uid === el.dataset.enemyUid) : null;
+    return ec ? { data: ec, badge: "ENEMY BLOCKER" } : null;
+  }
+  if (el.dataset.landUid !== undefined) {
+    const land = Array.isArray(state.playerLands) ? state.playerLands.find(l => l.uid === el.dataset.landUid) : null;
+    return land ? { data: land, badge: land.tapped ? "TAPPED LAND" : "MANA BASE" } : null;
+  }
+  if (el.dataset.relicId !== undefined) {
+    const relic = Array.isArray(state.relics) ? state.relics.find(r => r.id === el.dataset.relicId) : null;
+    return relic ? { data: { ...relic, isRelic: true }, badge: "COMMAND ZONE RELIC" } : null;
+  }
+  return null;
+}
+
+function initCardHoverInspector() {
+  if (isHeadlessEnv() || hoverInspectorInitialized || typeof document.addEventListener !== "function") return;
+  hoverInspectorInitialized = true;
+
+  let currentInspectEl = null;
+
+  const inspectFromEvent = (e) => {
+    const target = e.target && typeof e.target.closest === "function"
+      ? e.target.closest(HOVER_INSPECTOR_SELECTOR)
+      : null;
+    if (!target) return;
+    if (target === currentInspectEl) return;
+    const payload = resolveHoverInspectorPayload(target);
+    if (!payload) return;
+    currentInspectEl = target;
+    showCardHoverInspector(payload.data, target, payload.badge);
+  };
+
+  const clearIfLeft = (e) => {
+    if (!currentInspectEl) return;
+    const next = e.relatedTarget && typeof e.relatedTarget.closest === "function"
+      ? e.relatedTarget.closest(HOVER_INSPECTOR_SELECTOR)
+      : null;
+    if (next === currentInspectEl) return;
+    currentInspectEl = null;
+    hideCardHoverInspector();
+  };
+
+  document.addEventListener("pointerover", inspectFromEvent);
+  document.addEventListener("pointerout", clearIfLeft);
+  document.addEventListener("focusin", inspectFromEvent);
+  document.addEventListener("focusout", clearIfLeft);
+  document.addEventListener("pointerdown", () => {
+    currentInspectEl = null;
+    hideCardHoverInspector();
+  }, { passive: true });
+}
+
 function initEvents() {
   if (isHeadlessEnv()) return;
 
   initializeAmbientVisibilityHandling();
   initCardTiltTracking();
+  initCardHoverInspector();
 
   if (!activeHandDragController) {
     activeHandDragController = createHandDragController();
@@ -4845,10 +5432,12 @@ function initEvents() {
           setText("run-seed-desc", `Seeds must be ${MAX_RUN_SEED_LENGTH} characters or fewer.`);
           return;
         }
+        const ascSelect = getEl("run-ascension-select");
+        const ascensionLevel = ascSelect ? Number(ascSelect.value) || 0 : 0;
         newRunForceChoice = false;
         safeCloseModal(newrunDialog);
         clearRunState();
-        startNewRun(chosenDeck, challengeId, campaignId, seed);
+        startNewRun(chosenDeck, challengeId, campaignId, seed, { ascensionLevel });
       }
     });
   }
@@ -4872,6 +5461,34 @@ function initEvents() {
         openNewRunModal(true, "🏆 Planeswalker Ascendant — Start a New Run");
       });
     }
+  }
+
+  const ascensionSelect = getEl("run-ascension-select");
+  if (ascensionSelect) {
+    ascensionSelect.addEventListener("change", updateRunAscensionDescription);
+  }
+
+  const bossRelicDialog = getEl("boss-relic-dialog");
+  if (bossRelicDialog) {
+    bossRelicDialog.addEventListener("cancel", (e) => e.preventDefault());
+    bossRelicDialog.addEventListener("click", (e) => {
+      if (!e.target || typeof e.target.closest !== "function") return;
+      if (e.target.closest("#btn-skip-boss-relic, .btn-skip-boss-relic")) {
+        if (typeof skipBossRelic === "function") skipBossRelic();
+        return;
+      }
+      const btn = e.target.closest("[data-boss-relic-choice]");
+      if (btn) {
+        const idx = Number(btn.dataset.bossRelicChoice);
+        if (Number.isFinite(idx) && typeof selectBossRelic === "function") selectBossRelic(idx);
+        return;
+      }
+      const card = e.target.closest("[data-boss-relic-idx]");
+      if (card) {
+        const idx = Number(card.dataset.bossRelicIdx);
+        if (Number.isFinite(idx) && typeof selectBossRelic === "function") selectBossRelic(idx);
+      }
+    });
   }
 
   const draftDialog = getEl("draft-dialog");
@@ -4915,6 +5532,13 @@ function initEvents() {
 
     shopDialog.addEventListener("click", (e) => {
       if (!e.target || typeof e.target.closest !== "function") return;
+      const sellRelicBtn = e.target.closest("[data-shop-sell-relic]");
+      if (sellRelicBtn) {
+        hideCardHoverInspector();
+        sellRelic(sellRelicBtn.dataset.shopSellRelic);
+        return;
+      }
+
       const relicBtn = e.target.closest("[data-buy-relic]");
       if (relicBtn) buyRelic(Number(relicBtn.dataset.buyRelic));
 
@@ -4924,6 +5548,25 @@ function initEvents() {
       const upgBtn = e.target.closest("[data-buy-upg]");
       if (upgBtn) buyUpgrade(Number(upgBtn.dataset.buyUpg));
     });
+  }
+
+  const deckDialogTabs = getEl("deck-dialog-tabs");
+  if (deckDialogTabs) {
+    deckDialogTabs.addEventListener("click", (e) => {
+      const tab = e.target && typeof e.target.closest === "function" ? e.target.closest("[data-deck-filter]") : null;
+      if (!tab) return;
+      deckInspectorState.filter = tab.dataset.deckFilter || "all";
+      hideCardHoverInspector();
+      renderDeckInspectorView();
+    });
+  }
+
+  const deckDialog = getEl("deck-dialog");
+  if (deckDialog) {
+    deckDialog.addEventListener("close", hideCardHoverInspector);
+  }
+  if (shopDialog) {
+    shopDialog.addEventListener("close", hideCardHoverInspector);
   }
 
   const colorDialog = getEl("color-dialog");
@@ -4950,8 +5593,9 @@ function initEvents() {
   const rerollBtn = getEl("btn-reroll-shop");
   if (rerollBtn) {
     rerollBtn.addEventListener("click", () => {
-      if (state.gold < 2) return;
-      state.gold -= 2;
+      const rerollCost = typeof getShopRerollCost === "function" ? getShopRerollCost() : 2;
+      if (state.gold < rerollCost) return;
+      state.gold -= rerollCost;
       generateShopStock(true);
       saveRunState(true);
       renderShop();

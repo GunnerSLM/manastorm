@@ -124,6 +124,7 @@ console.log("--- 2. Frontend Distribution Staging (dist/) ---");
     "mana.js",
     "ui.js",
     "data/cards.js",
+    "data/card_art.js",
     "data/relics.js",
     "icon.png"
   ];
@@ -160,6 +161,7 @@ console.log("--- 3. DesktopBridge Runtime, Disk Save Sync, Backup & Settings ---
     : (file) => load(file);
 
   loadFile("data/cards.js");
+  loadFile("data/card_art.js");
   loadFile("data/relics.js");
   loadFile("mana.js");
   loadFile("combat.js");

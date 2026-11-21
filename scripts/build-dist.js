@@ -20,6 +20,7 @@ const RUNTIME_FILES = [
   "mana.js",
   "ui.js",
   "data/cards.js",
+  "data/card_art.js",
   "data/relics.js"
 ];
 
